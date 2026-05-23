@@ -1,4 +1,4 @@
-// The Great War — 국가 / 팩션 / 지도 데이터 (1939년 9월 기준)
+// The Great War — 국가 / 팩션 / 기술 / 유닛 데이터 (1939년 9월)
 
 const FACTIONS = {
   axis:      { name: '추축국',  color: '#6b4a2b', leader: 'GER' },
@@ -7,9 +7,64 @@ const FACTIONS = {
   neutral:   { name: '중립',    color: '#6c757d', leader: null  }
 };
 
+// 유닛 기본 스펙
+const UNIT_STATS = {
+  inf:  { name: '보병',   icon: '👥', baseStr: 10, mpCost: 1, eqCost: 1, prodTime: 1 },
+  tank: { name: '전차',   icon: '🛡', baseStr: 25, mpCost: 2, eqCost: 5, prodTime: 2 },
+  air:  { name: '항공기', icon: '✈',  baseStr: 15, mpCost: 1, eqCost: 4, prodTime: 2 }
+};
+
+// 경험치 등급
+const EXP_LEVELS = [
+  { min: 0,    name: '신병',     mult: 1.00, color: '#7f8c8d' },
+  { min: 50,   name: '정규군',   mult: 1.10, color: '#27ae60' },
+  { min: 150,  name: '정예',     mult: 1.25, color: '#3498db' },
+  { min: 350,  name: '최정예',   mult: 1.45, color: '#f0c060' }
+];
+
+// 기술 트리
+const TECHS = {
+  // === 산업 ===
+  ind_construction:  { cat:'산업', name:'건설 기법',     year:1939, cost:80,  effect:{build_speed:0.25} },
+  ind_production:    { cat:'산업', name:'대량 생산',     year:1940, cost:120, effect:{factory_eff:0.20} },
+  ind_concentrated:  { cat:'산업', name:'집중 산업',     year:1941, cost:160, prereq:['ind_production'], effect:{factory_eff:0.15} },
+  ind_mobilization:  { cat:'산업', name:'총동원령',      year:1941, cost:140, effect:{mp_regen:0.50} },
+
+  // === 보병 ===
+  inf_weapons1:      { cat:'보병', name:'보병 무기 1936', year:1939, cost:60,  effect:{inf_str:0.10} },
+  inf_weapons2:      { cat:'보병', name:'보병 무기 1940', year:1940, cost:90,  prereq:['inf_weapons1'], effect:{inf_str:0.15} },
+  inf_weapons3:      { cat:'보병', name:'돌격소총',      year:1943, cost:130, prereq:['inf_weapons2'], effect:{inf_str:0.20} },
+  inf_medical:       { cat:'보병', name:'야전 의무대',   year:1940, cost:80,  effect:{inf_loss_red:0.20} },
+
+  // === 전차 ===
+  tank_light:        { cat:'전차', name:'경전차',        year:1939, cost:80,  effect:{tank_str:0.10} },
+  tank_medium:       { cat:'전차', name:'중형 전차',     year:1941, cost:120, prereq:['tank_light'], effect:{tank_str:0.20} },
+  tank_heavy:        { cat:'전차', name:'중전차',        year:1943, cost:160, prereq:['tank_medium'], effect:{tank_str:0.25} },
+
+  // === 항공 ===
+  air_fighter1:      { cat:'항공', name:'전투기',        year:1939, cost:80,  effect:{air_str:0.15} },
+  air_fighter2:      { cat:'항공', name:'개량 전투기',   year:1941, cost:120, prereq:['air_fighter1'], effect:{air_str:0.20} },
+  air_bomber:        { cat:'항공', name:'중폭격기',      year:1942, cost:140, prereq:['air_fighter1'], effect:{combined_arms:0.15} },
+
+  // === 교리 ===
+  doc_blitz:         { cat:'교리', name:'전격전',        year:1940, cost:150, effect:{tank_attack:0.25} },
+  doc_mass:          { cat:'교리', name:'인해전술',      year:1940, cost:150, effect:{inf_str:0.10, mp_regen:0.30} },
+  doc_grand:         { cat:'교리', name:'대전략',        year:1941, cost:180, effect:{all_attack:0.10, all_defense:0.10} }
+};
+
+// 시작 시 진영별 보너스 (역사적 강점)
+const NATION_BIAS = {
+  GER: { doc:'doc_blitz',  startTech:['inf_weapons1','tank_light','air_fighter1','ind_construction'] },
+  GBR: { doc:'doc_grand',  startTech:['inf_weapons1','air_fighter1','ind_production'] },
+  FRA: { doc:'doc_grand',  startTech:['inf_weapons1','tank_light','ind_construction'] },
+  ITA: { doc:'doc_grand',  startTech:['inf_weapons1','air_fighter1'] },
+  USR: { doc:'doc_mass',   startTech:['inf_weapons1','tank_light','ind_mobilization'] },
+  POL: { doc:'doc_grand',  startTech:['inf_weapons1'] }
+};
+
 // 깃발 (간단한 SVG)
 const FLAGS = {
-  GER: '<svg viewBox="0 0 3 2" xmlns="http://www.w3.org/2000/svg"><rect width="3" height="2" fill="#fff"/><rect width="3" height="2" fill="#c00" y=".67" height=".67"/><g transform="translate(1.5,1)"><circle r=".35" fill="#fff"/><path d="M-.25,-.25 L.25,.25 M.25,-.25 L-.25,.25 M-.3,0 L.3,0 M0,-.3 L0,.3" stroke="#000" stroke-width=".06"/></g></svg>',
+  GER: '<svg viewBox="0 0 3 2" xmlns="http://www.w3.org/2000/svg"><rect width="3" height="2" fill="#fff"/><rect width="3" height=".67" fill="#000"/><rect width="3" height=".67" y="1.33" fill="#c00"/><circle cx="1.5" cy="1" r=".32" fill="#fff" stroke="#000" stroke-width=".04"/><path d="M1.5,.7 L1.5,1.3 M1.2,1 L1.8,1 M1.29,.79 L1.71,1.21 M1.71,.79 L1.29,1.21" stroke="#000" stroke-width=".07"/></svg>',
   ITA: '<svg viewBox="0 0 3 2"><rect width="1" height="2" fill="#009246"/><rect x="1" width="1" height="2" fill="#fff"/><rect x="2" width="1" height="2" fill="#ce2b37"/></svg>',
   GBR: '<svg viewBox="0 0 60 30"><clipPath id="t"><path d="M30,15 h30 v15 z v15 h-30 z h-30 v-15 z v-15 h30 z"/></clipPath><rect width="60" height="30" fill="#012169"/><path d="M0,0 L60,30 M60,0 L0,30" stroke="#fff" stroke-width="6"/><path d="M0,0 L60,30 M60,0 L0,30" clip-path="url(#t)" stroke="#C8102E" stroke-width="4"/><path d="M30,0 v30 M0,15 h60" stroke="#fff" stroke-width="10"/><path d="M30,0 v30 M0,15 h60" stroke="#C8102E" stroke-width="6"/></svg>',
   FRA: '<svg viewBox="0 0 3 2"><rect width="1" height="2" fill="#002395"/><rect x="1" width="1" height="2" fill="#fff"/><rect x="2" width="1" height="2" fill="#ed2939"/></svg>',
@@ -38,275 +93,304 @@ const FLAGS = {
   LTU: '<svg viewBox="0 0 3 2"><rect width="3" height=".67" fill="#fdb913"/><rect width="3" height=".67" y=".67" fill="#006a44"/><rect width="3" height=".67" y="1.33" fill="#c1272d"/></svg>'
 };
 
-// 국가 정의 — SVG polygon 좌표 + 게임 통계
+// 국가 정의 (poly = SVG 폴리곤, garrison = 주둔군)
+function mkGarr(inf, tank, air) {
+  return { inf: inf|0, tank: tank|0, air: air|0, exp: 0 };
+}
+
 const COUNTRIES = {
   // === 추축국 ===
   GER: {
-    name: '독일', shortName: 'GER',
-    poly: '420,200 480,205 510,235 510,275 495,310 470,320 440,310 415,295 405,265 410,225',
-    cx: 458, cy: 265,
-    faction: 'axis',
-    manpower: 80, civFactories: 18, milFactories: 24, army: 100,
-    neighbors: ['POL','CZE','AUT','SWI','FRA','LUX','BEL','NLD','DNK'],
-    ai: { aggression: 0.9, target: ['POL','FRA','BEL','NLD','LUX','DNK','NOR','USR','YUG','GRC'] }
+    name:'독일', shortName:'GER',
+    poly:'420,200 480,205 510,235 510,275 495,310 470,320 440,310 415,295 405,265 410,225',
+    cx:458, cy:265,
+    faction:'axis',
+    manpower:80, civFactories:18, milFactories:24,
+    garrison: mkGarr(60, 25, 15),
+    neighbors:['POL','CZE','AUT','SWI','FRA','LUX','BEL','NLD','DNK'],
+    ai:{ aggression:0.9, target:['POL','FRA','BEL','NLD','LUX','DNK','NOR','USR','YUG','GRC'] }
   },
   ITA: {
-    name: '이탈리아', shortName: 'ITA',
-    poly: '440,360 480,365 500,400 520,445 510,485 490,510 470,495 460,455 450,420 440,390',
-    cx: 478, cy: 430,
-    faction: 'neutral', wantsFaction: 'axis',
-    manpower: 40, civFactories: 12, milFactories: 14, army: 60,
-    neighbors: ['FRA','SWI','AUT','YUG','ALB','GRC'],
-    ai: { aggression: 0.7, target: ['ALB','GRC','YUG','FRA'] }
+    name:'이탈리아', shortName:'ITA',
+    poly:'440,360 480,365 500,400 520,445 510,485 490,510 470,495 460,455 450,420 440,390',
+    cx:478, cy:430,
+    faction:'neutral', wantsFaction:'axis',
+    manpower:40, civFactories:12, milFactories:14,
+    garrison: mkGarr(40, 12, 8),
+    neighbors:['FRA','SWI','AUT','YUG','ALB','GRC'],
+    ai:{ aggression:0.7, target:['ALB','GRC','YUG','FRA'] }
   },
   HUN: {
-    name: '헝가리', shortName: 'HUN',
-    poly: '555,335 600,335 605,360 580,375 555,365',
-    cx: 580, cy: 355,
-    faction: 'neutral', wantsFaction: 'axis',
-    manpower: 18, civFactories: 5, milFactories: 5, army: 15,
-    neighbors: ['AUT','CZE','ROM','YUG'],
-    ai: { aggression: 0.4, target: ['YUG','ROM'] }
+    name:'헝가리', shortName:'HUN',
+    poly:'555,335 600,335 605,360 580,375 555,365',
+    cx:580, cy:355,
+    faction:'neutral', wantsFaction:'axis',
+    manpower:18, civFactories:5, milFactories:5,
+    garrison: mkGarr(12, 2, 1),
+    neighbors:['AUT','CZE','ROM','YUG'],
+    ai:{ aggression:0.4, target:['YUG','ROM'] }
   },
   ROM: {
-    name: '루마니아', shortName: 'ROM',
-    poly: '605,335 670,335 680,365 655,385 620,380 600,360',
-    cx: 635, cy: 360,
-    faction: 'neutral',
-    manpower: 25, civFactories: 5, milFactories: 4, army: 18,
-    neighbors: ['HUN','YUG','BUL','USR'],
-    ai: { aggression: 0.3, target: [] }
+    name:'루마니아', shortName:'ROM',
+    poly:'605,335 670,335 680,365 655,385 620,380 600,360',
+    cx:635, cy:360,
+    faction:'neutral',
+    manpower:25, civFactories:5, milFactories:4,
+    garrison: mkGarr(15, 2, 1),
+    neighbors:['HUN','YUG','BUL','USR'],
+    ai:{ aggression:0.3, target:[] }
   },
   BUL: {
-    name: '불가리아', shortName: 'BUL',
-    poly: '620,395 670,395 680,425 645,435 620,420',
-    cx: 645, cy: 415,
-    faction: 'neutral',
-    manpower: 15, civFactories: 3, milFactories: 3, army: 12,
-    neighbors: ['ROM','YUG','GRC','TUR'],
-    ai: { aggression: 0.3, target: [] }
+    name:'불가리아', shortName:'BUL',
+    poly:'620,395 670,395 680,425 645,435 620,420',
+    cx:645, cy:415,
+    faction:'neutral',
+    manpower:15, civFactories:3, milFactories:3,
+    garrison: mkGarr(10, 1, 1),
+    neighbors:['ROM','YUG','GRC','TUR'],
+    ai:{ aggression:0.3, target:[] }
   },
 
   // === 연합국 ===
   GBR: {
-    name: '영국', shortName: 'GBR',
-    poly: '210,150 260,170 270,210 270,255 230,275 200,260 190,220 195,180',
-    cx: 230, cy: 215,
-    faction: 'allies',
-    manpower: 50, civFactories: 22, milFactories: 14, army: 50,
-    neighbors: ['FRA','IRE','NLD','NOR'],
-    ai: { aggression: 0.6, target: ['GER','ITA'] }
+    name:'영국', shortName:'GBR',
+    poly:'210,150 260,170 270,210 270,255 230,275 200,260 190,220 195,180',
+    cx:230, cy:215,
+    faction:'allies',
+    manpower:50, civFactories:22, milFactories:14,
+    garrison: mkGarr(30, 8, 12),
+    neighbors:['FRA','IRE','NLD','NOR'],
+    ai:{ aggression:0.6, target:['GER','ITA'] }
   },
   FRA: {
-    name: '프랑스', shortName: 'FRA',
-    poly: '295,290 360,290 380,325 385,375 360,395 320,400 290,380 280,330',
-    cx: 325, cy: 345,
-    faction: 'allies',
-    manpower: 42, civFactories: 16, milFactories: 14, army: 70,
-    neighbors: ['GBR','BEL','LUX','GER','SWI','ITA','ESP'],
-    ai: { aggression: 0.5, target: ['GER','ITA'] }
+    name:'프랑스', shortName:'FRA',
+    poly:'295,290 360,290 380,325 385,375 360,395 320,400 290,380 280,330',
+    cx:325, cy:345,
+    faction:'allies',
+    manpower:42, civFactories:16, milFactories:14,
+    garrison: mkGarr(50, 12, 8),
+    neighbors:['GBR','BEL','LUX','GER','SWI','ITA','ESP'],
+    ai:{ aggression:0.4, target:['GER','ITA'] }
   },
   POL: {
-    name: '폴란드', shortName: 'POL',
-    poly: '530,215 600,220 610,255 590,285 550,290 525,265',
-    cx: 565, cy: 255,
-    faction: 'allies',
-    manpower: 35, civFactories: 7, milFactories: 7, army: 40,
-    neighbors: ['GER','CZE','USR','LTU'],
-    ai: { aggression: 0.3, target: [] }
+    name:'폴란드', shortName:'POL',
+    poly:'530,215 600,220 610,255 590,285 550,290 525,265',
+    cx:565, cy:255,
+    faction:'allies',
+    manpower:35, civFactories:7, milFactories:7,
+    garrison: mkGarr(30, 5, 3),
+    neighbors:['GER','CZE','USR','LTU'],
+    ai:{ aggression:0.3, target:[] }
   },
   IRE: {
-    name: '아일랜드', shortName: 'IRE',
-    poly: '120,225 175,225 180,265 130,270 115,250',
-    cx: 145, cy: 245,
-    faction: 'neutral',
-    manpower: 8, civFactories: 2, milFactories: 1, army: 5,
-    neighbors: ['GBR'],
-    ai: { aggression: 0.1, target: [] }
+    name:'아일랜드', shortName:'IRE',
+    poly:'120,225 175,225 180,265 130,270 115,250',
+    cx:145, cy:245,
+    faction:'neutral',
+    manpower:8, civFactories:2, milFactories:1,
+    garrison: mkGarr(4, 0, 0),
+    neighbors:['GBR'],
+    ai:{ aggression:0.1, target:[] }
   },
   BEL: {
-    name: '벨기에', shortName: 'BEL',
-    poly: '355,275 395,275 400,295 380,305 360,295',
-    cx: 378, cy: 290,
-    faction: 'neutral', wantsFaction: 'allies',
-    manpower: 10, civFactories: 4, milFactories: 2, army: 12,
-    neighbors: ['NLD','GER','FRA','LUX'],
-    ai: { aggression: 0.1, target: [] }
+    name:'벨기에', shortName:'BEL',
+    poly:'355,275 395,275 400,295 380,305 360,295',
+    cx:378, cy:290,
+    faction:'neutral', wantsFaction:'allies',
+    manpower:10, civFactories:4, milFactories:2,
+    garrison: mkGarr(8, 1, 1),
+    neighbors:['NLD','GER','FRA','LUX'],
+    ai:{ aggression:0.1, target:[] }
   },
   NLD: {
-    name: '네덜란드', shortName: 'NLD',
-    poly: '370,240 410,240 415,265 390,275 370,265',
-    cx: 390, cy: 257,
-    faction: 'neutral', wantsFaction: 'allies',
-    manpower: 12, civFactories: 5, milFactories: 2, army: 10,
-    neighbors: ['GER','BEL','GBR'],
-    ai: { aggression: 0.1, target: [] }
+    name:'네덜란드', shortName:'NLD',
+    poly:'370,240 410,240 415,265 390,275 370,265',
+    cx:390, cy:257,
+    faction:'neutral', wantsFaction:'allies',
+    manpower:12, civFactories:5, milFactories:2,
+    garrison: mkGarr(7, 1, 1),
+    neighbors:['GER','BEL','GBR'],
+    ai:{ aggression:0.1, target:[] }
   },
   LUX: {
-    name: '룩셈부르크', shortName: 'LUX',
-    poly: '395,295 410,295 412,308 397,308',
-    cx: 403, cy: 302,
-    faction: 'neutral',
-    manpower: 1, civFactories: 1, milFactories: 1, army: 1,
-    neighbors: ['BEL','GER','FRA'],
-    ai: { aggression: 0, target: [] }
+    name:'룩셈부르크', shortName:'LUX',
+    poly:'395,295 410,295 412,308 397,308',
+    cx:403, cy:302,
+    faction:'neutral',
+    manpower:1, civFactories:1, milFactories:1,
+    garrison: mkGarr(1, 0, 0),
+    neighbors:['BEL','GER','FRA'],
+    ai:{ aggression:0, target:[] }
   },
 
   // === 코민테른 ===
   USR: {
-    name: '소비에트 연방', shortName: 'USR',
-    poly: '690,140 950,140 950,400 850,420 770,410 720,380 700,300 685,220',
-    cx: 815, cy: 270,
-    faction: 'comintern',
-    manpower: 170, civFactories: 28, milFactories: 32, army: 130,
-    neighbors: ['FIN','LTU','POL','ROM','TUR'],
-    ai: { aggression: 0.6, target: ['POL','FIN','LTU','ROM'] }
+    name:'소비에트 연방', shortName:'USR',
+    poly:'690,140 950,140 950,400 850,420 770,410 720,380 700,300 685,220',
+    cx:815, cy:270,
+    faction:'comintern',
+    manpower:170, civFactories:28, milFactories:32,
+    garrison: mkGarr(90, 30, 10),
+    neighbors:['FIN','LTU','POL','ROM','TUR'],
+    ai:{ aggression:0.6, target:['POL','FIN','LTU','ROM'] }
   },
 
   // === 중립 ===
   ESP: {
-    name: '스페인', shortName: 'ESP',
-    poly: '180,400 280,400 290,460 250,490 200,485 165,445',
-    cx: 225, cy: 445,
-    faction: 'neutral',
-    manpower: 30, civFactories: 7, milFactories: 5, army: 25,
-    neighbors: ['FRA','PRT'],
-    ai: { aggression: 0.1, target: [] }
+    name:'스페인', shortName:'ESP',
+    poly:'180,400 280,400 290,460 250,490 200,485 165,445',
+    cx:225, cy:445,
+    faction:'neutral',
+    manpower:30, civFactories:7, milFactories:5,
+    garrison: mkGarr(18, 3, 1),
+    neighbors:['FRA','PRT'],
+    ai:{ aggression:0.1, target:[] }
   },
   PRT: {
-    name: '포르투갈', shortName: 'PRT',
-    poly: '135,425 175,425 180,475 145,485 125,460',
-    cx: 152, cy: 455,
-    faction: 'neutral',
-    manpower: 8, civFactories: 2, milFactories: 1, army: 6,
-    neighbors: ['ESP'],
-    ai: { aggression: 0, target: [] }
+    name:'포르투갈', shortName:'PRT',
+    poly:'135,425 175,425 180,475 145,485 125,460',
+    cx:152, cy:455,
+    faction:'neutral',
+    manpower:8, civFactories:2, milFactories:1,
+    garrison: mkGarr(5, 0, 0),
+    neighbors:['ESP'],
+    ai:{ aggression:0, target:[] }
   },
   SWI: {
-    name: '스위스', shortName: 'SWI',
-    poly: '405,335 445,335 450,355 425,365 405,355',
-    cx: 425, cy: 348,
-    faction: 'neutral',
-    manpower: 6, civFactories: 3, milFactories: 2, army: 10,
-    neighbors: ['FRA','GER','AUT','ITA'],
-    ai: { aggression: 0, target: [] }
+    name:'스위스', shortName:'SWI',
+    poly:'405,335 445,335 450,355 425,365 405,355',
+    cx:425, cy:348,
+    faction:'neutral',
+    manpower:6, civFactories:3, milFactories:2,
+    garrison: mkGarr(8, 1, 1),
+    neighbors:['FRA','GER','AUT','ITA'],
+    ai:{ aggression:0, target:[] }
   },
   AUT: {
-    name: '오스트리아', shortName: 'AUT',
-    poly: '485,315 555,315 555,340 510,345 485,335',
-    cx: 520, cy: 330,
-    faction: 'axis', annexed: 'GER',
-    manpower: 12, civFactories: 4, milFactories: 4, army: 8,
-    neighbors: ['GER','CZE','HUN','ITA','SWI','YUG'],
-    ai: { aggression: 0, target: [] }
+    name:'오스트리아', shortName:'AUT',
+    poly:'485,315 555,315 555,340 510,345 485,335',
+    cx:520, cy:330,
+    faction:'axis', annexed:'GER',
+    manpower:12, civFactories:4, milFactories:4,
+    garrison: mkGarr(5, 1, 0),
+    neighbors:['GER','CZE','HUN','ITA','SWI','YUG'],
+    ai:{ aggression:0, target:[] }
   },
   CZE: {
-    name: '체코슬로바키아', shortName: 'CZE',
-    poly: '500,275 565,275 570,305 530,315 500,305',
-    cx: 532, cy: 295,
-    faction: 'axis', annexed: 'GER',
-    manpower: 14, civFactories: 6, milFactories: 6, army: 5,
-    neighbors: ['GER','POL','HUN','AUT'],
-    ai: { aggression: 0, target: [] }
+    name:'체코슬로바키아', shortName:'CZE',
+    poly:'500,275 565,275 570,305 530,315 500,305',
+    cx:532, cy:295,
+    faction:'axis', annexed:'GER',
+    manpower:14, civFactories:6, milFactories:6,
+    garrison: mkGarr(3, 1, 0),
+    neighbors:['GER','POL','HUN','AUT'],
+    ai:{ aggression:0, target:[] }
   },
   DNK: {
-    name: '덴마크', shortName: 'DNK',
-    poly: '430,170 475,170 478,200 445,205 425,195',
-    cx: 452, cy: 188,
-    faction: 'neutral',
-    manpower: 7, civFactories: 3, milFactories: 1, army: 8,
-    neighbors: ['GER','NOR','SWE'],
-    ai: { aggression: 0, target: [] }
+    name:'덴마크', shortName:'DNK',
+    poly:'430,170 475,170 478,200 445,205 425,195',
+    cx:452, cy:188,
+    faction:'neutral',
+    manpower:7, civFactories:3, milFactories:1,
+    garrison: mkGarr(5, 0, 0),
+    neighbors:['GER','NOR','SWE'],
+    ai:{ aggression:0, target:[] }
   },
   NOR: {
-    name: '노르웨이', shortName: 'NOR',
-    poly: '460,60 520,60 530,120 510,170 470,170 455,120',
-    cx: 488, cy: 115,
-    faction: 'neutral',
-    manpower: 9, civFactories: 3, milFactories: 2, army: 12,
-    neighbors: ['SWE','FIN','DNK','GBR'],
-    ai: { aggression: 0, target: [] }
+    name:'노르웨이', shortName:'NOR',
+    poly:'460,60 520,60 530,120 510,170 470,170 455,120',
+    cx:488, cy:115,
+    faction:'neutral',
+    manpower:9, civFactories:3, milFactories:2,
+    garrison: mkGarr(8, 1, 1),
+    neighbors:['SWE','FIN','DNK','GBR'],
+    ai:{ aggression:0, target:[] }
   },
   SWE: {
-    name: '스웨덴', shortName: 'SWE',
-    poly: '535,70 595,70 605,135 580,170 545,155 530,110',
-    cx: 568, cy: 115,
-    faction: 'neutral',
-    manpower: 12, civFactories: 5, milFactories: 3, army: 15,
-    neighbors: ['NOR','FIN','DNK'],
-    ai: { aggression: 0, target: [] }
+    name:'스웨덴', shortName:'SWE',
+    poly:'535,70 595,70 605,135 580,170 545,155 530,110',
+    cx:568, cy:115,
+    faction:'neutral',
+    manpower:12, civFactories:5, milFactories:3,
+    garrison: mkGarr(10, 2, 1),
+    neighbors:['NOR','FIN','DNK'],
+    ai:{ aggression:0, target:[] }
   },
   FIN: {
-    name: '핀란드', shortName: 'FIN',
-    poly: '620,55 700,55 700,140 660,160 625,140 610,100',
-    cx: 660, cy: 105,
-    faction: 'neutral',
-    manpower: 15, civFactories: 3, milFactories: 2, army: 18,
-    neighbors: ['NOR','SWE','USR'],
-    ai: { aggression: 0.3, target: ['USR'] }
+    name:'핀란드', shortName:'FIN',
+    poly:'620,55 700,55 700,140 660,160 625,140 610,100',
+    cx:660, cy:105,
+    faction:'neutral',
+    manpower:15, civFactories:3, milFactories:2,
+    garrison: mkGarr(12, 1, 1),
+    neighbors:['NOR','SWE','USR'],
+    ai:{ aggression:0.3, target:['USR'] }
   },
   YUG: {
-    name: '유고슬라비아', shortName: 'YUG',
-    poly: '510,360 605,360 605,395 575,420 530,415 505,390',
-    cx: 555, cy: 390,
-    faction: 'neutral',
-    manpower: 20, civFactories: 4, milFactories: 4, army: 22,
-    neighbors: ['ITA','AUT','HUN','ROM','BUL','ALB','GRC'],
-    ai: { aggression: 0.2, target: [] }
+    name:'유고슬라비아', shortName:'YUG',
+    poly:'510,360 605,360 605,395 575,420 530,415 505,390',
+    cx:555, cy:390,
+    faction:'neutral',
+    manpower:20, civFactories:4, milFactories:4,
+    garrison: mkGarr(18, 2, 1),
+    neighbors:['ITA','AUT','HUN','ROM','BUL','ALB','GRC'],
+    ai:{ aggression:0.2, target:[] }
   },
   GRC: {
-    name: '그리스', shortName: 'GRC',
-    poly: '565,440 625,440 635,475 600,495 565,485 555,460',
-    cx: 595, cy: 465,
-    faction: 'neutral',
-    manpower: 14, civFactories: 3, milFactories: 2, army: 14,
-    neighbors: ['YUG','BUL','ALB','TUR'],
-    ai: { aggression: 0.1, target: [] }
+    name:'그리스', shortName:'GRC',
+    poly:'565,440 625,440 635,475 600,495 565,485 555,460',
+    cx:595, cy:465,
+    faction:'neutral',
+    manpower:14, civFactories:3, milFactories:2,
+    garrison: mkGarr(11, 1, 1),
+    neighbors:['YUG','BUL','ALB','TUR'],
+    ai:{ aggression:0.1, target:[] }
   },
   ALB: {
-    name: '알바니아', shortName: 'ALB',
-    poly: '540,425 570,425 572,455 545,460 535,440',
-    cx: 552, cy: 442,
-    faction: 'neutral',
-    manpower: 3, civFactories: 1, milFactories: 1, army: 3,
-    neighbors: ['YUG','GRC','ITA'],
-    ai: { aggression: 0, target: [] }
+    name:'알바니아', shortName:'ALB',
+    poly:'540,425 570,425 572,455 545,460 535,440',
+    cx:552, cy:442,
+    faction:'neutral',
+    manpower:3, civFactories:1, milFactories:1,
+    garrison: mkGarr(3, 0, 0),
+    neighbors:['YUG','GRC','ITA'],
+    ai:{ aggression:0, target:[] }
   },
   TUR: {
-    name: '터키', shortName: 'TUR',
-    poly: '690,440 800,435 830,460 815,495 770,500 720,485 695,465',
-    cx: 760, cy: 465,
-    faction: 'neutral',
-    manpower: 40, civFactories: 6, milFactories: 4, army: 35,
-    neighbors: ['BUL','GRC','USR'],
-    ai: { aggression: 0, target: [] }
+    name:'터키', shortName:'TUR',
+    poly:'690,440 800,435 830,460 815,495 770,500 720,485 695,465',
+    cx:760, cy:465,
+    faction:'neutral',
+    manpower:40, civFactories:6, milFactories:4,
+    garrison: mkGarr(30, 3, 2),
+    neighbors:['BUL','GRC','USR'],
+    ai:{ aggression:0, target:[] }
   },
   LTU: {
-    name: '리투아니아', shortName: 'LTU',
-    poly: '625,205 680,200 685,230 650,240 625,230',
-    cx: 655, cy: 220,
-    faction: 'neutral',
-    manpower: 5, civFactories: 1, milFactories: 1, army: 4,
-    neighbors: ['USR','POL'],
-    ai: { aggression: 0, target: [] }
+    name:'리투아니아', shortName:'LTU',
+    poly:'625,205 680,200 685,230 650,240 625,230',
+    cx:655, cy:220,
+    faction:'neutral',
+    manpower:5, civFactories:1, milFactories:1,
+    garrison: mkGarr(3, 0, 0),
+    neighbors:['USR','POL'],
+    ai:{ aggression:0, target:[] }
   }
 };
 
-// 시작시 이미 진행 중인 전쟁
 const INITIAL_WARS = [
   ['GER','POL'],
   ['GER','FRA'],
   ['GER','GBR']
 ];
 
-// 플레이어 선택지
 const PLAYABLE = ['GER','GBR','FRA','ITA','USR','POL'];
 
 const PLAYABLE_DESC = {
-  GER: { faction: '추축국 (지도국)', desc: '강력한 군대와 산업력. 폴란드를 침공한 직후. 유럽 정복을 노리시오.' },
-  GBR: { faction: '연합국 (지도국)', desc: '해군 강국. 산업력 우수하나 본토 병력은 적음. 식민지를 동원하라.' },
-  FRA: { faction: '연합국', desc: '대규모 육군. 마지노 선의 그늘에서 독일의 침공을 막아야 한다.' },
-  ITA: { faction: '중립 → 추축', desc: '지중해의 패권을 노리는 무솔리니. 적절한 시점에 전쟁 참여.' },
-  USR: { faction: '코민테른', desc: '거대한 인력과 산업. 동유럽을 휩쓸고 베를린까지 진군하라.' },
-  POL: { faction: '연합국 (위기)', desc: '독일과 소련 사이에 끼인 약소국. 생존이 곧 승리다.' }
+  GER: { faction:'추축국 (지도국)', desc:'강력한 군대와 산업. 폴란드 침공 직후. 전격전 교리.' },
+  GBR: { faction:'연합국 (지도국)', desc:'해군 강국, 우수한 산업. 본토 병력 부족. 대전략 교리.' },
+  FRA: { faction:'연합국',         desc:'대규모 육군. 마지노 선의 그늘. 독일을 막아라.' },
+  ITA: { faction:'중립→추축',      desc:'지중해 패권 야망. 시기를 보아 참전.' },
+  USR: { faction:'코민테른',        desc:'무한한 인력. 동유럽을 휩쓸고 베를린으로. 인해전술.' },
+  POL: { faction:'연합국 (위기)',  desc:'독·소 사이의 약소국. 생존이 곧 승리.' }
 };

@@ -3,45 +3,97 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>The Great War - 2차 세계대전 전략게임</title>
+<title>The Great War — 2차 세계대전 전략게임</title>
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
 
+<!-- ========== 시작 화면 ========== -->
 <div id="start-screen" class="screen">
   <div class="start-content">
     <h1 class="title">THE GREAT WAR</h1>
     <p class="subtitle">1939년 9월 — 유럽은 다시 불타오른다</p>
-    <p class="instruction">국가를 선택하여 역사를 새로 쓰십시오</p>
-    <div id="nation-select"></div>
-    <div class="how-to">
+
+    <div id="mode-select" class="mode-grid">
+      <button class="mode-btn" data-mode="single">
+        <div class="mode-icon">⚔</div>
+        <div class="mode-title">싱글 플레이</div>
+        <div class="mode-desc">한 국가를 맡아 AI와 맞선다</div>
+      </button>
+      <button class="mode-btn" data-mode="multi">
+        <div class="mode-icon">👥</div>
+        <div class="mode-title">멀티 (핫시트)</div>
+        <div class="mode-desc">2~6명이 같은 기기로 교대 플레이</div>
+      </button>
+    </div>
+
+    <div id="player-count-select" class="hidden">
+      <h3 class="section-title">플레이어 수</h3>
+      <div class="count-grid">
+        <button class="count-btn" data-n="2">2</button>
+        <button class="count-btn" data-n="3">3</button>
+        <button class="count-btn" data-n="4">4</button>
+        <button class="count-btn" data-n="5">5</button>
+        <button class="count-btn" data-n="6">6</button>
+      </div>
+    </div>
+
+    <div id="nation-select-wrap" class="hidden">
+      <h3 class="section-title" id="ns-title">국가를 선택하세요</h3>
+      <div id="nation-select"></div>
+    </div>
+
+    <div id="back-btn-wrap" class="hidden">
+      <button id="back-btn" class="back-btn">◀ 처음으로</button>
+    </div>
+
+    <div class="how-to" id="how-to">
       <h3>플레이 방법</h3>
       <ul>
-        <li><b>국가 클릭</b> — 정보 보기</li>
-        <li><b>본국 클릭</b> — 공장 건설 / 병력 모집</li>
-        <li><b>인접국 클릭</b> — 선전포고 / 공격</li>
-        <li><b>다음 턴</b> — 1개월 경과, 생산과 전투 처리</li>
-        <li><b>승리 조건</b> — 자국 진영이 모든 강대국을 점령</li>
+        <li><b>지도 클릭</b> — 국가 선택, 상세 정보 표시</li>
+        <li><b>본국</b> — 공장 건설, 병력 모집, 훈련, 기술 연구</li>
+        <li><b>이동/공격 모드</b> — 부대를 인접 영토로 보낸다</li>
+        <li><b>외교</b> — 선전포고, 동맹, 불가침 조약, 강화</li>
+        <li><b>유닛 3종</b> — 보병(저렴), 전차(공격), 항공(연계)</li>
+        <li><b>기술</b> — 5개 분야, 시대별로 해금되는 강력한 보너스</li>
+        <li><b>경험치</b> — 전투를 거듭하면 정예 → 최정예로 성장</li>
+        <li><b>승리</b> — 1948년까지 자국 진영이 모든 강대국을 흡수</li>
       </ul>
     </div>
   </div>
 </div>
 
+<!-- ========== 핫시트 전환 화면 ========== -->
+<div id="handoff-screen" class="screen hidden">
+  <div class="handoff-content">
+    <div id="handoff-flag" class="big-flag"></div>
+    <h2 id="handoff-name">플레이어 1</h2>
+    <p>기기를 다음 플레이어에게 넘겨주세요</p>
+    <button id="handoff-go">차례 시작 ▶</button>
+  </div>
+</div>
+
+<!-- ========== 게임 화면 ========== -->
 <div id="game-screen" class="screen hidden">
   <header id="topbar">
     <div class="brand">THE GREAT WAR</div>
     <div class="status">
       <span id="date-display">1939년 9월</span>
-      <span class="player-tag">플레이어: <b id="player-name">-</b></span>
+      <span class="player-tag" id="player-tag"></span>
     </div>
     <div class="resources" id="resources">
-      <div class="res"><span class="res-label">인력</span><span id="r-manpower">0</span>K</div>
-      <div class="res"><span class="res-label">민간공장</span><span id="r-civ">0</span></div>
-      <div class="res"><span class="res-label">군수공장</span><span id="r-mil">0</span></div>
-      <div class="res"><span class="res-label">건설점수</span><span id="r-cp">0</span></div>
-      <div class="res"><span class="res-label">병력</span><span id="r-army">0</span>K</div>
+      <div class="res" title="인력 (병력 모집의 자원)"><span class="res-label">인력</span><span id="r-manpower">0</span>K</div>
+      <div class="res" title="민간공장 → 건설점수"><span class="res-label">민간</span><span id="r-civ">0</span></div>
+      <div class="res" title="군수공장 → 장비 생산"><span class="res-label">군수</span><span id="r-mil">0</span></div>
+      <div class="res" title="건설점수: 공장·훈련에 사용"><span class="res-label">CP</span><span id="r-cp">0</span></div>
+      <div class="res" title="장비: 유닛 생산 자원"><span class="res-label">장비</span><span id="r-eq">0</span></div>
+      <div class="res" title="연구점수"><span class="res-label">연구</span><span id="r-rp">0</span></div>
     </div>
-    <button id="next-turn-btn">다음 턴 ▶</button>
+    <div class="top-actions">
+      <button id="tech-btn" class="icon-btn" title="기술 연구">🔬</button>
+      <button id="prod-btn" class="icon-btn" title="생산 배분">⚙️</button>
+      <button id="end-turn-btn">차례 종료 ▶</button>
+    </div>
   </header>
 
   <main id="main-area">
@@ -58,12 +110,15 @@
           </filter>
         </defs>
         <rect width="1000" height="700" fill="url(#seaGrad)"/>
-        <g id="sea-decor"></g>
         <g id="adjacency-lines"></g>
-        <g id="countries"></g>
         <g id="war-indicators"></g>
+        <g id="countries"></g>
         <g id="labels"></g>
+        <g id="fx-layer"></g>
       </svg>
+
+      <div id="mode-indicator" class="hidden"></div>
+
       <div id="map-legend">
         <div class="lg"><span class="dot axis"></span>추축국</div>
         <div class="lg"><span class="dot allies"></span>연합국</div>
@@ -78,6 +133,7 @@
         <h2 id="cp-name">국가를 선택하세요</h2>
         <div id="cp-flag-line"></div>
         <div id="cp-stats"></div>
+        <div id="cp-garrison"></div>
         <div id="cp-relations"></div>
       </div>
 
@@ -94,11 +150,47 @@
   </main>
 </div>
 
-<div id="modal" class="hidden">
-  <div class="modal-content">
+<!-- ========== 기술 트리 모달 ========== -->
+<div id="tech-modal" class="modal-overlay hidden">
+  <div class="modal-large">
+    <div class="modal-header">
+      <h2>🔬 기술 연구</h2>
+      <button class="modal-x" data-close="tech-modal">✕</button>
+    </div>
+    <div id="tech-status"></div>
+    <div id="tech-tree"></div>
+  </div>
+</div>
+
+<!-- ========== 생산 배분 모달 ========== -->
+<div id="prod-modal" class="modal-overlay hidden">
+  <div class="modal-medium">
+    <div class="modal-header">
+      <h2>⚙️ 생산 배분</h2>
+      <button class="modal-x" data-close="prod-modal">✕</button>
+    </div>
+    <p class="modal-desc">군수공장이 매월 생산하는 장비를 어떤 유닛으로 만들지 배분합니다.</p>
+    <div id="prod-sliders"></div>
+    <div id="prod-summary"></div>
+    <button id="prod-save" class="primary-btn">저장</button>
+  </div>
+</div>
+
+<!-- ========== 전투 결과 모달 ========== -->
+<div id="combat-modal" class="modal-overlay hidden">
+  <div class="modal-medium combat-modal">
+    <h2 id="combat-title">⚔ 전투 결과</h2>
+    <div id="combat-body"></div>
+    <button data-close="combat-modal" class="primary-btn">확인</button>
+  </div>
+</div>
+
+<!-- ========== 일반 모달 ========== -->
+<div id="modal" class="modal-overlay hidden">
+  <div class="modal-medium">
     <h2 id="modal-title"></h2>
     <p id="modal-body"></p>
-    <button id="modal-close">확인</button>
+    <button id="modal-close" class="primary-btn">확인</button>
   </div>
 </div>
 
