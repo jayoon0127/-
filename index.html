@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>The Great War - 2차 세계대전 전략게임</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<div id="start-screen" class="screen">
+  <div class="start-content">
+    <h1 class="title">THE GREAT WAR</h1>
+    <p class="subtitle">1939년 9월 — 유럽은 다시 불타오른다</p>
+    <p class="instruction">국가를 선택하여 역사를 새로 쓰십시오</p>
+    <div id="nation-select"></div>
+    <div class="how-to">
+      <h3>플레이 방법</h3>
+      <ul>
+        <li><b>국가 클릭</b> — 정보 보기</li>
+        <li><b>본국 클릭</b> — 공장 건설 / 병력 모집</li>
+        <li><b>인접국 클릭</b> — 선전포고 / 공격</li>
+        <li><b>다음 턴</b> — 1개월 경과, 생산과 전투 처리</li>
+        <li><b>승리 조건</b> — 자국 진영이 모든 강대국을 점령</li>
+      </ul>
+    </div>
+  </div>
+</div>
+
+<div id="game-screen" class="screen hidden">
+  <header id="topbar">
+    <div class="brand">THE GREAT WAR</div>
+    <div class="status">
+      <span id="date-display">1939년 9월</span>
+      <span class="player-tag">플레이어: <b id="player-name">-</b></span>
+    </div>
+    <div class="resources" id="resources">
+      <div class="res"><span class="res-label">인력</span><span id="r-manpower">0</span>K</div>
+      <div class="res"><span class="res-label">민간공장</span><span id="r-civ">0</span></div>
+      <div class="res"><span class="res-label">군수공장</span><span id="r-mil">0</span></div>
+      <div class="res"><span class="res-label">건설점수</span><span id="r-cp">0</span></div>
+      <div class="res"><span class="res-label">병력</span><span id="r-army">0</span>K</div>
+    </div>
+    <button id="next-turn-btn">다음 턴 ▶</button>
+  </header>
+
+  <main id="main-area">
+    <div id="map-container">
+      <svg id="map" viewBox="0 0 1000 700" preserveAspectRatio="xMidYMid meet">
+        <defs>
+          <radialGradient id="seaGrad" cx="50%" cy="50%" r="80%">
+            <stop offset="0%" stop-color="#1a3550"/>
+            <stop offset="100%" stop-color="#0a1a2c"/>
+          </radialGradient>
+          <filter id="glow" x="-50%" y="-50%" width="200%" height="200%">
+            <feGaussianBlur stdDeviation="3" result="blur"/>
+            <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+          </filter>
+        </defs>
+        <rect width="1000" height="700" fill="url(#seaGrad)"/>
+        <g id="sea-decor"></g>
+        <g id="adjacency-lines"></g>
+        <g id="countries"></g>
+        <g id="war-indicators"></g>
+        <g id="labels"></g>
+      </svg>
+      <div id="map-legend">
+        <div class="lg"><span class="dot axis"></span>추축국</div>
+        <div class="lg"><span class="dot allies"></span>연합국</div>
+        <div class="lg"><span class="dot comintern"></span>코민테른</div>
+        <div class="lg"><span class="dot neutral"></span>중립</div>
+        <div class="lg"><span class="dot player"></span>플레이어</div>
+      </div>
+    </div>
+
+    <aside id="sidebar">
+      <div id="country-panel" class="panel">
+        <h2 id="cp-name">국가를 선택하세요</h2>
+        <div id="cp-flag-line"></div>
+        <div id="cp-stats"></div>
+        <div id="cp-relations"></div>
+      </div>
+
+      <div id="action-panel" class="panel">
+        <h3>행동</h3>
+        <div id="actions"></div>
+      </div>
+
+      <div id="log-panel" class="panel">
+        <h3>전황 보고서</h3>
+        <ul id="log"></ul>
+      </div>
+    </aside>
+  </main>
+</div>
+
+<div id="modal" class="hidden">
+  <div class="modal-content">
+    <h2 id="modal-title"></h2>
+    <p id="modal-body"></p>
+    <button id="modal-close">확인</button>
+  </div>
+</div>
+
+<script src="data.js"></script>
+<script src="game.js"></script>
+</body>
+</html>
