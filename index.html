@@ -3,21 +3,49 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>역전재판: 숙제 안 한 자의 변론</title>
+<title>역전재판: 숙제 안 한 자의 변론 (AI Edition)</title>
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
 
 <div id="title-screen" class="screen">
   <div class="title-content">
-    <div class="title-mark">逆転裁判</div>
+    <div class="title-mark">逆転裁判 · AI</div>
     <h1 class="game-title">역전재판</h1>
     <h2 class="game-subtitle">— 숙제 안 한 자의 변론 —</h2>
-    <p class="title-tag">학원 강의실 법정에서 진실을 밝혀라</p>
+    <p class="title-tag">학원 강의실 법정에서 진실을 밝혀라<br><span class="ai-tag">선생님이 실시간 AI로 반박합니다</span></p>
     <button id="start-btn" class="court-btn">법정 입정</button>
-    <p class="credit">A Phoenix Wright Parody · 영어학원 에디션</p>
+    <button id="config-btn" class="secondary-btn">API 키 설정</button>
+    <p class="credit">A Phoenix Wright Parody · 영어학원 에디션 · Powered by Claude</p>
   </div>
   <div class="title-bg"></div>
+</div>
+
+<div id="apikey-modal" class="screen hidden">
+  <div class="modal-card">
+    <h2>Anthropic API 키 입력</h2>
+    <p class="modal-desc">
+      이 게임은 <b>Claude API</b>를 호출해서 선생님의 반박을 생성합니다.<br>
+      <a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noopener">console.anthropic.com</a>에서 API 키를 받으세요.<br>
+      <span class="modal-warn">키는 <b>브라우저 localStorage</b>에만 저장됩니다. 외부로 전송되지 않습니다 (Anthropic API 제외).</span>
+    </p>
+    <input type="password" id="apikey-input" placeholder="sk-ant-..." autocomplete="off" spellcheck="false">
+    <div class="modal-row">
+      <label class="modal-select">
+        모델:
+        <select id="model-select">
+          <option value="claude-opus-4-7" selected>Opus 4.7 (가장 똑똑, 느림)</option>
+          <option value="claude-sonnet-4-6">Sonnet 4.6 (균형)</option>
+          <option value="claude-haiku-4-5">Haiku 4.5 (가장 빠름, 저렴)</option>
+        </select>
+      </label>
+    </div>
+    <div class="modal-buttons">
+      <button id="apikey-save" class="court-btn">저장하고 시작</button>
+      <button id="apikey-cancel" class="secondary-btn">취소</button>
+    </div>
+    <p id="apikey-error" class="modal-error hidden"></p>
+  </div>
 </div>
 
 <div id="game-screen" class="screen hidden">
@@ -26,7 +54,10 @@
       <div class="hp-label">신뢰도</div>
       <div id="hp-bar"><div id="hp-fill"></div></div>
       <div id="hp-text">100 / 100</div>
+      <div id="round-text">라운드 1 / 7</div>
     </div>
+
+    <button id="reset-key-btn" title="API 키 변경">⚙</button>
 
     <div id="scene">
       <div class="char-side left">
@@ -52,6 +83,10 @@
     <div id="holdit-overlay" class="hidden">
       <div id="holdit-text">잠깐!</div>
     </div>
+    <div id="thinking-overlay" class="hidden">
+      <div id="thinking-text">선생님이 ChatGPT에게 물어보는 중...</div>
+      <div class="spinner"></div>
+    </div>
 
     <div id="dialog-box">
       <div id="speaker-name">선생님</div>
@@ -59,18 +94,13 @@
       <div id="dialog-next" class="hidden">▼</div>
     </div>
 
-    <div id="choices" class="hidden"></div>
-
-    <div id="evidence-panel" class="hidden">
-      <h3>증거 제시</h3>
-      <div id="evidence-list"></div>
-      <button id="cancel-evidence">취소</button>
-    </div>
-
-    <div id="action-bar" class="hidden">
-      <button class="action-btn" data-action="argue">이의제기</button>
-      <button class="action-btn" data-action="evidence">증거제출</button>
-      <button class="action-btn" data-action="admit">자백</button>
+    <div id="input-area" class="hidden">
+      <div class="input-label">변명을 입력하세요 <span class="hint">(Enter = 제출, Shift+Enter = 줄바꿈)</span></div>
+      <textarea id="student-input" placeholder="예: 강아지가 숙제장을 먹어버렸어요..." rows="3" maxlength="500"></textarea>
+      <div class="input-buttons">
+        <button id="submit-btn" class="action-btn">변론 제출</button>
+        <button id="giveup-btn" class="action-btn admit">자백 (포기)</button>
+      </div>
     </div>
   </div>
 </div>

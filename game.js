@@ -1,40 +1,42 @@
-// 역전재판: 숙제 안 한 자의 변론 — 게임 로직
+// 역전재판: 숙제 안 한 자의 변론 — AI Edition
+// 학생(플레이어)가 자유 입력 → Claude API가 선생님의 반박을 생성
 
 const State = {
   hp: 100,
   maxHp: 100,
-  roundIndex: 0,
-  currentRound: null,
-  currentExcuse: null,
-  honestWin: false,
+  round: 0,
+  conversation: [],  // [{role: 'user'|'assistant', content: string}, ...] — Claude API 형식
   typing: false,
-  typingTimer: null,
-  pendingResolve: null,
-  inventory: {}  // evidence keys -> true
+  busy: false,       // API 호출 중
 };
 
+const LS_KEY = 'aceattorney_hw_apikey';
+const LS_MODEL = 'aceattorney_hw_model';
+
 // ===== DOM =====
-const $ = (sel) => document.querySelector(sel);
+const $ = (s) => document.querySelector(s);
 const titleScreen = $('#title-screen');
 const gameScreen = $('#game-screen');
 const verdictScreen = $('#verdict-screen');
-const dialogBox = $('#dialog-box');
+const apikeyModal = $('#apikey-modal');
 const dialogText = $('#dialog-text');
 const speakerName = $('#speaker-name');
 const dialogNext = $('#dialog-next');
-const choicesEl = $('#choices');
-const actionBar = $('#action-bar');
-const evidencePanel = $('#evidence-panel');
-const evidenceList = $('#evidence-list');
 const teacherSprite = $('#teacher-sprite');
 const studentSprite = $('#student-sprite');
 const teacherFace = $('#teacher-face');
 const studentFace = $('#student-face');
 const hpFill = $('#hp-fill');
 const hpText = $('#hp-text');
+const roundText = $('#round-text');
 const courtBg = $('#court-bg');
+const inputArea = $('#input-area');
+const studentInput = $('#student-input');
+const submitBtn = $('#submit-btn');
+const giveupBtn = $('#giveup-btn');
+const thinkingOverlay = $('#thinking-overlay');
 
-// ===== Audio (Web Audio synth — no external files) =====
+// ===== Audio =====
 let audioCtx = null;
 function ensureAudio() {
   if (!audioCtx) {
@@ -54,12 +56,10 @@ function beep(freq = 440, dur = 0.08, type = 'square', vol = 0.08) {
   osc.start();
   osc.stop(audioCtx.currentTime + dur);
 }
-function shout(kind = 'objection') {
+function shout(kind) {
   if (!audioCtx) return;
-  // 음 시퀀스로 외침 효과
   const base = kind === 'objection' ? 220 : kind === 'takethat' ? 260 : 300;
-  const seq = [base, base * 1.4, base * 1.05, base * 1.6];
-  seq.forEach((f, i) => {
+  [base, base * 1.4, base * 1.05, base * 1.6].forEach((f, i) => {
     setTimeout(() => beep(f, 0.12, 'sawtooth', 0.14), i * 60);
   });
 }
@@ -87,12 +87,14 @@ function setHP(newHp) {
   if (pct <= 30) hpFill.classList.add('danger');
   else if (pct <= 60) hpFill.classList.add('warning');
 }
-
+function setRound(n) {
+  State.round = n;
+  roundText.textContent = `라운드 ${n} / ${MAX_ROUNDS}`;
+}
 function setFace(who, emoji) {
   if (who === 'teacher') teacherFace.textContent = emoji;
   else if (who === 'student') studentFace.textContent = emoji;
 }
-
 function spotlight(who) {
   if (who === 'teacher') {
     teacherSprite.classList.add('active');
@@ -111,24 +113,36 @@ function spotlight(who) {
     studentSprite.classList.remove('dimmed', 'active');
   }
 }
-
 function shakeSprite(who) {
   const sp = who === 'teacher' ? teacherSprite : studentSprite;
   sp.classList.add('shake');
   setTimeout(() => sp.classList.remove('shake'), 400);
   thump();
 }
-
-function flash(kind = 'flash') {
+function flashEffect(kind) {
   courtBg.classList.add(kind);
   setTimeout(() => courtBg.classList.remove(kind), 500);
 }
 
-// ===== Dialog (typewriter with skip) =====
-function buildSegments(html) {
-  // Parse HTML into [{ ch, style }] tokens
-  const wrapper = document.createElement('span');
-  wrapper.innerHTML = html;
+// ===== Dialog (typewriter) =====
+// 인용된 텍스트를 안전하게 렌더링: <강조></강조> 또는 <span class="emph"></span>만 허용
+function sanitizeText(text) {
+  // Convert <강조>...</강조> → <span class="emph">...</span>
+  // and strip everything else
+  let s = String(text || '');
+  s = s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  s = s.replace(/&lt;강조&gt;/g, '<span class="emph">').replace(/&lt;\/강조&gt;/g, '</span>');
+  // 이미 escape된 <span class="emph">와 </span>은 그대로 두기 위해, INTRO 등에서 쓰는 원본 <span class="emph"> 패턴도 허용
+  s = s.replace(/&lt;span class=&quot;emph&quot;&gt;/g, '<span class="emph">');
+  s = s.replace(/&lt;span class="emph"&gt;/g, '<span class="emph">');
+  s = s.replace(/&lt;\/span&gt;/g, '</span>');
+  return s;
+}
+
+function buildSegments(htmlSafe) {
+  // htmlSafe is already-safe HTML — only contains <span class="emph"> and </span>
+  const wrap = document.createElement('span');
+  wrap.innerHTML = htmlSafe;
   const tokens = [];
   function walk(node, style) {
     if (node.nodeType === 3) {
@@ -138,7 +152,7 @@ function buildSegments(html) {
       for (const c of node.childNodes) walk(c, cls);
     }
   }
-  walk(wrapper, '');
+  walk(wrap, '');
   return tokens;
 }
 function renderTokens(tokens, n) {
@@ -151,19 +165,17 @@ function renderTokens(tokens, n) {
       if (style) buf += `<span class="${style}">`;
       lastCls = style;
     }
-    buf += ch === '\n' ? '<br>' : escapeChar(ch);
+    if (ch === '\n') buf += '<br>';
+    else if (ch === '<') buf += '&lt;';
+    else if (ch === '>') buf += '&gt;';
+    else if (ch === '&') buf += '&amp;';
+    else buf += ch;
   }
   if (lastCls) buf += '</span>';
   return buf;
 }
-function escapeChar(c) {
-  if (c === '<') return '&lt;';
-  if (c === '>') return '&gt;';
-  if (c === '&') return '&amp;';
-  return c;
-}
 
-function say(speakerKey, displayName, face, htmlText) {
+function say(speakerKey, displayName, face, rawText, opts = {}) {
   return new Promise((resolve) => {
     speakerName.textContent = displayName;
     if (speakerKey === 'teacher' || speakerKey === 'student') {
@@ -172,8 +184,8 @@ function say(speakerKey, displayName, face, htmlText) {
     } else {
       spotlight(null);
     }
-
-    const tokens = buildSegments(htmlText);
+    const html = sanitizeText(rawText);
+    const tokens = buildSegments(html);
     let i = 0;
     let timer = null;
     let done = false;
@@ -188,41 +200,40 @@ function say(speakerKey, displayName, face, htmlText) {
         beep(660 + Math.random() * 80, 0.02, 'square', 0.03);
       }
       if (i >= tokens.length) {
-        finishTyping();
+        finish();
         return;
       }
       timer = setTimeout(tick, 22);
     }
-    function finishTyping() {
+    function finish() {
       if (timer) { clearTimeout(timer); timer = null; }
       i = tokens.length;
       dialogText.innerHTML = renderTokens(tokens, i);
       State.typing = false;
       dialogNext.classList.remove('hidden');
     }
-    function onAdvance(e) {
+    function advance(e) {
       if (e && e.target && (
-        e.target.closest('#choices') ||
-        e.target.closest('#action-bar') ||
-        e.target.closest('#evidence-panel')
+        e.target.closest('#input-area') ||
+        e.target.closest('#thinking-overlay') ||
+        e.target.closest('#reset-key-btn') ||
+        e.target.closest('#hp-bar-wrap')
       )) return;
-      if (State.typing) {
-        finishTyping();
-        return;
-      }
+      if (State.typing) { finish(); return; }
       if (done) return;
       done = true;
-      document.removeEventListener('click', onAdvance);
+      document.removeEventListener('click', advance);
       document.removeEventListener('keydown', onKey);
       resolve();
     }
     function onKey(e) {
       if (e.code === 'Space' || e.code === 'Enter') {
+        if (document.activeElement === studentInput) return;
         e.preventDefault();
-        onAdvance({ target: document.body });
+        advance({ target: document.body });
       }
     }
-    document.addEventListener('click', onAdvance);
+    document.addEventListener('click', advance);
     document.addEventListener('keydown', onKey);
     timer = setTimeout(tick, 22);
   });
@@ -232,10 +243,8 @@ function say(speakerKey, displayName, face, htmlText) {
 function showOverlay(id, ms = 1100) {
   const el = document.getElementById(id);
   el.classList.remove('hidden');
-  // restart animation
   const inner = el.firstElementChild;
   inner.style.animation = 'none';
-  // force reflow
   void inner.offsetWidth;
   inner.style.animation = '';
   return new Promise((resolve) => {
@@ -245,236 +254,217 @@ function showOverlay(id, ms = 1100) {
     }, ms);
   });
 }
-
 async function objection() {
-  flash('redflash');
-  shout('objection');
-  shakeSprite('student');
+  flashEffect('redflash'); shout('objection'); shakeSprite('student');
   await showOverlay('objection-overlay', 1200);
 }
 async function takeThat() {
-  flash('flash');
-  shout('takethat');
-  shakeSprite('teacher');
+  flashEffect('flash'); shout('takethat'); shakeSprite('teacher');
   await showOverlay('takethat-overlay', 1200);
 }
 async function holdIt() {
-  flash('flash');
-  shout('holdit');
+  flashEffect('flash'); shout('holdit');
   await showOverlay('holdit-overlay', 900);
 }
 
-// ===== Choices =====
-function showChoices(options, label = null) {
+// ===== Input =====
+function showInput() {
   return new Promise((resolve) => {
-    choicesEl.innerHTML = '';
-    choicesEl.classList.remove('hidden');
-    options.forEach((opt, i) => {
-      const btn = document.createElement('button');
-      btn.className = 'choice-btn';
-      btn.textContent = `${i + 1}. ${opt.text}`;
-      btn.onclick = () => {
-        choicesEl.classList.add('hidden');
-        beep(660, 0.06, 'square', 0.1);
-        resolve(opt);
-      };
-      choicesEl.appendChild(btn);
-    });
-  });
-}
+    inputArea.classList.remove('hidden');
+    studentInput.value = '';
+    studentInput.disabled = false;
+    submitBtn.disabled = false;
+    giveupBtn.disabled = false;
+    setTimeout(() => studentInput.focus(), 50);
 
-function showActionBar() {
-  return new Promise((resolve) => {
-    actionBar.classList.remove('hidden');
-    const handlers = {};
-    actionBar.querySelectorAll('.action-btn').forEach((btn) => {
-      const action = btn.dataset.action;
-      const h = () => {
-        actionBar.classList.add('hidden');
-        actionBar.querySelectorAll('.action-btn').forEach((b) => {
-          b.removeEventListener('click', handlers[b.dataset.action]);
-        });
-        beep(880, 0.06, 'square', 0.1);
-        resolve(action);
-      };
-      handlers[action] = h;
-      btn.addEventListener('click', h);
-    });
-  });
-}
-
-function showEvidence() {
-  return new Promise((resolve) => {
-    evidenceList.innerHTML = '';
-    const keys = Object.keys(State.inventory).filter((k) => State.inventory[k]);
-    if (keys.length === 0) {
-      const empty = document.createElement('div');
-      empty.style.cssText = 'grid-column: 1/-1; text-align:center; color:#888; padding:20px;';
-      empty.textContent = '(가진 증거가 없다...)';
-      evidenceList.appendChild(empty);
+    function cleanup() {
+      submitBtn.removeEventListener('click', onSubmit);
+      giveupBtn.removeEventListener('click', onGiveUp);
+      studentInput.removeEventListener('keydown', onKey);
+      inputArea.classList.add('hidden');
     }
-    keys.forEach((k) => {
-      const ev = EVIDENCE[k];
-      const item = document.createElement('div');
-      item.className = 'evidence-item';
-      item.innerHTML = `<div class="evidence-icon">${ev.icon}</div><div class="evidence-name">${ev.name}</div>`;
-      item.title = ev.desc;
-      item.onclick = () => {
-        evidencePanel.classList.add('hidden');
-        beep(880, 0.06, 'square', 0.1);
-        resolve(k);
-      };
-      evidenceList.appendChild(item);
-    });
-    evidencePanel.classList.remove('hidden');
-    const cancel = $('#cancel-evidence');
-    const onCancel = () => {
-      cancel.removeEventListener('click', onCancel);
-      evidencePanel.classList.add('hidden');
-      resolve(null);
-    };
-    cancel.addEventListener('click', onCancel);
+    function onSubmit() {
+      const text = studentInput.value.trim();
+      if (!text) {
+        studentInput.focus();
+        return;
+      }
+      beep(660, 0.06, 'square', 0.1);
+      cleanup();
+      resolve({ type: 'argue', text });
+    }
+    function onGiveUp() {
+      beep(220, 0.1, 'sawtooth', 0.1);
+      cleanup();
+      resolve({ type: 'giveup' });
+    }
+    function onKey(e) {
+      if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        onSubmit();
+      }
+    }
+    submitBtn.addEventListener('click', onSubmit);
+    giveupBtn.addEventListener('click', onGiveUp);
+    studentInput.addEventListener('keydown', onKey);
   });
 }
 
-// ===== Main flow =====
+// ===== Claude API =====
+async function callClaude(userText) {
+  const apiKey = localStorage.getItem(LS_KEY);
+  const model = localStorage.getItem(LS_MODEL) || 'claude-opus-4-7';
+  if (!apiKey) throw new Error('API 키가 없습니다.');
+
+  State.conversation.push({ role: 'user', content: userText });
+
+  const body = {
+    model,
+    max_tokens: 1024,
+    system: SYSTEM_PROMPT,
+    messages: State.conversation,
+    output_config: {
+      format: {
+        type: 'json_schema',
+        schema: REBUTTAL_SCHEMA
+      }
+    }
+  };
+
+  const resp = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-api-key': apiKey,
+      'anthropic-version': '2023-06-01',
+      'anthropic-dangerous-direct-browser-access': 'true'
+    },
+    body: JSON.stringify(body)
+  });
+
+  if (!resp.ok) {
+    let detail = '';
+    try {
+      const errBody = await resp.json();
+      detail = errBody?.error?.message || JSON.stringify(errBody);
+    } catch (e) {
+      detail = await resp.text();
+    }
+    throw new Error(`API ${resp.status}: ${detail}`);
+  }
+
+  const data = await resp.json();
+  const textBlock = (data.content || []).find((b) => b.type === 'text');
+  if (!textBlock) throw new Error('API 응답에 텍스트 블록이 없습니다.');
+
+  let parsed;
+  try {
+    parsed = JSON.parse(textBlock.text);
+  } catch (e) {
+    throw new Error('AI 응답 JSON 파싱 실패: ' + textBlock.text.slice(0, 200));
+  }
+
+  // 어시스턴트 응답을 conversation에도 저장 (다음 라운드 컨텍스트용)
+  State.conversation.push({ role: 'assistant', content: textBlock.text });
+
+  return parsed;
+}
+
+// ===== Game Flow =====
 async function startGame() {
   ensureAudio();
   titleScreen.classList.add('hidden');
   gameScreen.classList.remove('hidden');
   State.hp = State.maxHp = 100;
-  State.roundIndex = 0;
-  State.honestWin = false;
-  // 학생은 모든 증거를 보유
-  State.inventory = {};
-  Object.keys(EVIDENCE).forEach((k) => { State.inventory[k] = true; });
+  State.conversation = [];
   setHP(100);
+  setRound(0);
 
   // 인트로
   for (const line of INTRO_SCRIPT) {
     if (line.speaker === 'narrator') {
       await say('narrator', line.name, null, line.text);
-    } else if (line.speaker === 'teacher') {
-      await say('teacher', line.name, line.face, line.text);
     } else {
-      await say('student', line.name, line.face, line.text);
-    }
-    if (State.hp <= 0) break;
-  }
-
-  // 라운드 진행
-  for (State.roundIndex = 0; State.roundIndex < ROUNDS.length; State.roundIndex++) {
-    if (State.hp <= 0) break;
-    const finished = await playRound(ROUNDS[State.roundIndex]);
-    if (finished === 'honest') { State.honestWin = true; break; }
-    if (State.hp <= 0) break;
-  }
-
-  await endGame();
-}
-
-async function playRound(round) {
-  State.currentRound = round;
-  // 선생님의 질문
-  await say('teacher', '영어학원 선생님', round.question.face, round.question.text);
-
-  // 학생이 변명 선택
-  await say('narrator', '— 변명을 선택하라 —', null, '어떻게 대답할 것인가...?');
-  const excuse = await showChoices(round.excuses);
-  State.currentExcuse = excuse;
-
-  // 학생이 변명을 말함
-  await say('student', '학생 (나)', '😬', excuse.studentLine);
-
-  // 선생님이 OBJECTION! → AI 반박
-  await objection();
-  await say('teacher', '영어학원 선생님', excuse.rebuttal.face, excuse.rebuttal.text);
-
-  // 정직 자백은 즉시 honest 엔딩으로
-  if (excuse.honest) {
-    setHP(State.hp - excuse.damage);
-    await say('student', '학생 (나)', '😌', '...정말 죄송합니다. 다음부터는 미리 할게요.');
-    return 'honest';
-  }
-
-  // 학생 행동 선택 루프
-  let resolved = false;
-  while (!resolved) {
-    if (State.hp <= 0) break;
-    await say('narrator', '— 어떻게 대응할 것인가? —', null,
-      '<span class="emph">이의제기</span>: 말로 반박 (도박)\n<span class="emph">증거제출</span>: 인벤토리에서 증거 제시 (정공법)\n<span class="emph">자백</span>: 변명 포기 (피해 최소)');
-    const action = await showActionBar();
-
-    if (action === 'argue') {
-      // 말로 반박 — 약점이 없으면 큰 피해
-      await holdIt();
-      await say('student', '학생 (나)', '😤', '잠깐만요! 그건 말이 안 돼요! 그러니까... 어... 그게...');
-      if (excuse.weakness) {
-        // 증거가 필요한데 말로만 반박 → 부분 피해
-        setHP(State.hp - Math.floor(excuse.damage * 0.7));
-        await say('teacher', '영어학원 선생님', '😏',
-          '<span class="emph">근거가 뭐냐?</span> ChatGPT는 근거 없는 주장을 인정하지 않는다.');
-        resolved = false;  // 다시 선택
-      } else {
-        // 약점이 없다 = 그 변명은 어차피 반박 불가
-        setHP(State.hp - excuse.damage);
-        await say('teacher', '영어학원 선생님', '😤', '말장난은 그만하자.');
-        resolved = true;
-      }
-    } else if (action === 'evidence') {
-      const key = await showEvidence();
-      if (!key) continue;
-      const ev = EVIDENCE[key];
-      // 일치하는 증거인가?
-      if (excuse.weakness && ev.counters.includes(excuse.weakness)) {
-        await takeThat();
-        await say('student', '학생 (나)', '😎', ev.counterLine);
-        await say('teacher', '영어학원 선생님', '😱',
-          '<span class="emph">뭐... 뭐라고?!</span> 이... 이건 예상 못 했다!');
-        await say('teacher', '영어학원 선생님', '😣',
-          '(ChatGPT한테 어떻게 반박해야 하지... 으...) 좋다, 이 라운드는 너의 승리다.');
-        // 적중 보너스
-        setHP(State.hp + 10);
-        resolved = true;
-      } else {
-        // 엉뚱한 증거
-        setHP(State.hp - 20);
-        await say('teacher', '영어학원 선생님', '😏',
-          `<span class="emph">${ev.name}?</span> 그게 지금 이 변명이랑 무슨 상관이지?`);
-        resolved = false;
-      }
-    } else if (action === 'admit') {
-      setHP(State.hp - Math.floor(excuse.damage * 0.4));
-      await say('student', '학생 (나)', '😞', '...죄송해요. 그 변명은 거짓말이었어요.');
-      await say('teacher', '영어학원 선생님', '😐', '솔직한 건 봐주마. 하지만 점수는 깎인다.');
-      resolved = true;
+      await say(line.speaker, line.name, line.face, line.text);
     }
   }
-  return 'continue';
+
+  // 라운드 루프
+  for (let r = 1; r <= MAX_ROUNDS; r++) {
+    setRound(r);
+    // 선생님의 질문
+    const q = r === 1 ? OPENING_QUESTION : FOLLOWUP_QUESTIONS[r - 2] || FOLLOWUP_QUESTIONS[FOLLOWUP_QUESTIONS.length - 1];
+    await say('teacher', '영어학원 선생님', q.face, q.text);
+
+    // 학생 입력
+    const action = await showInput();
+    if (action.type === 'giveup') {
+      await say('student', '학생 (나)', '😞', '...죄송합니다. 사실 그냥 안 한 거예요.');
+      return endGame('guilty', '자백');
+    }
+
+    // 학생 대사 표시
+    await say('student', '학생 (나)', '😬', action.text);
+
+    // OBJECTION! → API 호출
+    await objection();
+
+    let aiResult;
+    try {
+      thinkingOverlay.classList.remove('hidden');
+      aiResult = await callClaude(action.text);
+    } catch (err) {
+      thinkingOverlay.classList.add('hidden');
+      await say('narrator', '— 시스템 오류 —', null, `<span class="emph">API 호출 실패:</span>\n${err.message}\n\nAPI 키나 네트워크를 확인하세요.`);
+      // 키 재설정 모달로
+      gameScreen.classList.add('hidden');
+      openApiKeyModal(err.message);
+      return;
+    } finally {
+      thinkingOverlay.classList.add('hidden');
+    }
+
+    // 반박 표시
+    await say('teacher', '영어학원 선생님', '😏', aiResult.rebuttal);
+
+    // 데미지 적용
+    const dmg = Math.max(0, Math.min(30, parseInt(aiResult.damage, 10) || 0));
+    if (dmg > 0) {
+      setHP(State.hp - dmg);
+    }
+
+    // 평결 체크
+    if (aiResult.verdict === 'notguilty') {
+      await takeThat();
+      await say('student', '학생 (나)', '😎', '(이겼다... 선생님의 ChatGPT가 패배했다...!)');
+      return endGame('notguilty');
+    }
+    if (aiResult.verdict === 'guilty' || State.hp <= 0) {
+      await say('student', '학생 (나)', '😭', '아... 아니... 끝났다...');
+      return endGame('guilty');
+    }
+  }
+
+  // 라운드 다 씀
+  if (State.hp >= 50) {
+    return endGame('notguilty');
+  }
+  return endGame('timeout');
 }
 
-async function endGame() {
-  let ending;
-  if (State.honestWin) ending = ENDINGS.honest;
-  else if (State.hp <= 0) ending = ENDINGS.lose;
-  else ending = ENDINGS.win;
-
-  // 결말 대사
+async function endGame(verdictKey, note) {
+  const ending = ENDINGS[verdictKey] || ENDINGS.guilty;
   spotlight(null);
-  if (ending === ENDINGS.win) {
+  if (verdictKey === 'notguilty') {
     await say('teacher', '영어학원 선생님', '😵', '...내... 내가 졌다. 너의 변론은 완벽했다.');
     await say('teacher', '영어학원 선생님', '😈', '하지만 다음 주 숙제는 두 배다.');
-    await say('student', '학생 (나)', '😎', '(이겼다... 하지만 진정한 적은 다음 주의 나다...)');
-  } else if (ending === ENDINGS.lose) {
-    await say('teacher', '영어학원 선생님', '😤', '신뢰도 0. <span class="emph">유죄!</span>');
-    await say('teacher', '영어학원 선생님', '📞', '어머님께 전화 한 통 드릴게.');
-    await say('student', '학생 (나)', '😭', '아아... 끝났다...');
+  } else if (verdictKey === 'timeout') {
+    await say('teacher', '영어학원 선생님', '😤', '7라운드 다 썼지만 신뢰도가 부족하다.');
   } else {
-    await say('student', '학생 (나)', '🙏', '정말 죄송해요. 다음부터는 절대 안 까먹을게요.');
-    await say('teacher', '영어학원 선생님', '😌', '...그래. 가봐.');
+    await say('teacher', '영어학원 선생님', '😤', '<span class="emph">유죄!</span>' + (note ? ` (${note})` : ''));
+    await say('teacher', '영어학원 선생님', '📞', '어머님께 전화 한 통 드릴게.');
   }
 
-  // 평결 화면
   gameScreen.classList.add('hidden');
   verdictScreen.classList.remove('hidden');
   const title = $('#verdict-title');
@@ -482,34 +472,85 @@ async function endGame() {
   title.className = '';
   title.classList.add(ending.titleClass);
   $('#verdict-desc').textContent = ending.desc;
-  // 효과음
-  if (ending === ENDINGS.lose) {
-    shout('objection');
+  shout(verdictKey === 'notguilty' ? 'takethat' : 'objection');
+}
+
+// ===== API key modal =====
+function openApiKeyModal(errorMsg) {
+  titleScreen.classList.add('hidden');
+  gameScreen.classList.add('hidden');
+  verdictScreen.classList.add('hidden');
+  apikeyModal.classList.remove('hidden');
+  const existing = localStorage.getItem(LS_KEY) || '';
+  $('#apikey-input').value = existing;
+  const existingModel = localStorage.getItem(LS_MODEL) || 'claude-opus-4-7';
+  $('#model-select').value = existingModel;
+  const errEl = $('#apikey-error');
+  if (errorMsg) {
+    errEl.textContent = errorMsg;
+    errEl.classList.remove('hidden');
   } else {
-    shout('takethat');
+    errEl.classList.add('hidden');
   }
+  setTimeout(() => $('#apikey-input').focus(), 50);
+}
+function closeApiKeyModal() {
+  apikeyModal.classList.add('hidden');
+  titleScreen.classList.remove('hidden');
 }
 
 // ===== Init =====
 $('#start-btn').addEventListener('click', (e) => {
   e.stopPropagation();
   ensureAudio();
-  // 다음 tick에 startGame을 호출해서 이 click 이벤트가
-  // 다이얼로그 advance로 잘못 잡히지 않게 한다.
+  const key = localStorage.getItem(LS_KEY);
+  if (!key) {
+    openApiKeyModal();
+    return;
+  }
   setTimeout(startGame, 0);
 });
+
+$('#config-btn').addEventListener('click', (e) => {
+  e.stopPropagation();
+  openApiKeyModal();
+});
+
+$('#apikey-save').addEventListener('click', (e) => {
+  e.stopPropagation();
+  const key = $('#apikey-input').value.trim();
+  const errEl = $('#apikey-error');
+  if (!key) {
+    errEl.textContent = 'API 키를 입력하세요.';
+    errEl.classList.remove('hidden');
+    return;
+  }
+  if (!key.startsWith('sk-ant-')) {
+    errEl.textContent = 'Anthropic API 키는 "sk-ant-"로 시작합니다.';
+    errEl.classList.remove('hidden');
+    return;
+  }
+  localStorage.setItem(LS_KEY, key);
+  localStorage.setItem(LS_MODEL, $('#model-select').value);
+  apikeyModal.classList.add('hidden');
+  ensureAudio();
+  setTimeout(startGame, 0);
+});
+
+$('#apikey-cancel').addEventListener('click', (e) => {
+  e.stopPropagation();
+  closeApiKeyModal();
+});
+
+$('#reset-key-btn').addEventListener('click', (e) => {
+  e.stopPropagation();
+  e.stopImmediatePropagation();
+  gameScreen.classList.add('hidden');
+  openApiKeyModal();
+});
+
 $('#restart-btn').addEventListener('click', (e) => {
   e.stopPropagation();
   verdictScreen.classList.add('hidden');
   titleScreen.classList.remove('hidden');
-});
-
-// 키보드: 숫자키로 선택지 선택
-document.addEventListener('keydown', (e) => {
-  if (choicesEl.classList.contains('hidden')) return;
-  const n = parseInt(e.key, 10);
-  if (n >= 1 && n <= 9) {
-    const btn = choicesEl.querySelectorAll('.choice-btn')[n - 1];
-    if (btn) btn.click();
-  }
 });
