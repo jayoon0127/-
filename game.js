@@ -1,802 +1,515 @@
-// The Great War — 게임 로직
+// 역전재판: 숙제 안 한 자의 변론 — 게임 로직
 
 const State = {
-  year: 1939,
-  month: 9,
-  playerCC: null,
-  selectedCC: null,
-  countries: {},
-  log: [],
-  gameOver: false,
-  turn: 0
+  hp: 100,
+  maxHp: 100,
+  roundIndex: 0,
+  currentRound: null,
+  currentExcuse: null,
+  honestWin: false,
+  typing: false,
+  typingTimer: null,
+  pendingResolve: null,
+  inventory: {}  // evidence keys -> true
 };
 
-// ============== 초기화 ==============
-function initGame() {
-  // 깊은 복사
-  State.countries = JSON.parse(JSON.stringify(COUNTRIES));
+// ===== DOM =====
+const $ = (sel) => document.querySelector(sel);
+const titleScreen = $('#title-screen');
+const gameScreen = $('#game-screen');
+const verdictScreen = $('#verdict-screen');
+const dialogBox = $('#dialog-box');
+const dialogText = $('#dialog-text');
+const speakerName = $('#speaker-name');
+const dialogNext = $('#dialog-next');
+const choicesEl = $('#choices');
+const actionBar = $('#action-bar');
+const evidencePanel = $('#evidence-panel');
+const evidenceList = $('#evidence-list');
+const teacherSprite = $('#teacher-sprite');
+const studentSprite = $('#student-sprite');
+const teacherFace = $('#teacher-face');
+const studentFace = $('#student-face');
+const hpFill = $('#hp-fill');
+const hpText = $('#hp-text');
+const courtBg = $('#court-bg');
 
-  // 합병 처리 (오스트리아·체코슬로바키아 → 독일)
-  for (const cc in State.countries) {
-    const c = State.countries[cc];
-    c.cc = cc;
-    c.owner = cc;
-    c.wars = [];
-    c.allies = [];
-    c.cp = 0;            // 건설점수
-    c.constructions = []; // [{type:'civ'|'mil', remaining:n}]
-
-    if (c.annexed) {
-      const owner = State.countries[c.annexed];
-      owner.manpower += c.manpower;
-      owner.civFactories += c.civFactories;
-      owner.milFactories += c.milFactories;
-      owner.army += c.army;
-      c.owner = c.annexed;
-      c.manpower = 0; c.civFactories = 0; c.milFactories = 0; c.army = 0;
-    }
-  }
-
-  // 초기 전쟁
-  for (const [a,b] of INITIAL_WARS) {
-    declareWar(a, b, true);
+// ===== Audio (Web Audio synth — no external files) =====
+let audioCtx = null;
+function ensureAudio() {
+  if (!audioCtx) {
+    try { audioCtx = new (window.AudioContext || window.webkitAudioContext)(); }
+    catch (e) { audioCtx = null; }
   }
 }
-
-// ============== 화면 그리기 ==============
-function renderStartScreen() {
-  const sel = document.getElementById('nation-select');
-  sel.innerHTML = '';
-  for (const cc of PLAYABLE) {
-    const c = COUNTRIES[cc];
-    const d = PLAYABLE_DESC[cc];
-    const card = document.createElement('div');
-    card.className = 'nation-card';
-    card.innerHTML = `
-      <div>
-        <span class="flag">${FLAGS[cc]||''}</span>
-        <span class="nname">${c.name}</span>
-      </div>
-      <div class="nfaction">${d.faction}</div>
-      <div class="ndesc">${d.desc}</div>
-      <div class="nstats">
-        <span>인력 ${c.manpower}</span>
-        <span>병력 ${c.army}</span>
-        <span>공장 ${c.civFactories+c.milFactories}</span>
-      </div>
-    `;
-    card.onclick = () => startGame(cc);
-    sel.appendChild(card);
-  }
+function beep(freq = 440, dur = 0.08, type = 'square', vol = 0.08) {
+  if (!audioCtx) return;
+  const osc = audioCtx.createOscillator();
+  const gain = audioCtx.createGain();
+  osc.type = type;
+  osc.frequency.value = freq;
+  gain.gain.value = vol;
+  gain.gain.exponentialRampToValueAtTime(0.0001, audioCtx.currentTime + dur);
+  osc.connect(gain).connect(audioCtx.destination);
+  osc.start();
+  osc.stop(audioCtx.currentTime + dur);
 }
-
-function startGame(cc) {
-  State.playerCC = cc;
-  initGame();
-  document.getElementById('start-screen').classList.add('hidden');
-  document.getElementById('game-screen').classList.remove('hidden');
-  document.getElementById('player-name').textContent = COUNTRIES[cc].name;
-  renderMap();
-  selectCountry(cc);
-  updateTopBar();
-  pushLog('전쟁이 시작되었다. ' + COUNTRIES[cc].name + '의 운명은 당신 손에 달렸다.', 'important');
-}
-
-function factionColor(faction) {
-  return FACTIONS[faction]?.color || '#666';
-}
-
-function ownerColor(cc) {
-  const c = State.countries[cc];
-  const owner = State.countries[c.owner];
-  if (c.owner === State.playerCC) return '#f0c060';
-  return factionColor(owner.faction);
-}
-
-function renderMap() {
-  const adjG = document.getElementById('adjacency-lines');
-  const warG = document.getElementById('war-indicators');
-  const cntG = document.getElementById('countries');
-  const lblG = document.getElementById('labels');
-  adjG.innerHTML = ''; warG.innerHTML = ''; cntG.innerHTML = ''; lblG.innerHTML = '';
-
-  // 인접선
-  const drawnPairs = new Set();
-  for (const cc in State.countries) {
-    const c = State.countries[cc];
-    for (const n of c.neighbors) {
-      const key = [cc,n].sort().join('-');
-      if (drawnPairs.has(key)) continue;
-      drawnPairs.add(key);
-      const nb = State.countries[n];
-      if (!nb) continue;
-      const l = document.createElementNS('http://www.w3.org/2000/svg','line');
-      l.setAttribute('x1', c.cx); l.setAttribute('y1', c.cy);
-      l.setAttribute('x2', nb.cx); l.setAttribute('y2', nb.cy);
-      l.setAttribute('class','adj-line');
-      adjG.appendChild(l);
-    }
-  }
-
-  // 전쟁선
-  const warPairs = new Set();
-  for (const cc in State.countries) {
-    const c = State.countries[cc];
-    for (const w of c.wars) {
-      const key = [cc,w].sort().join('-');
-      if (warPairs.has(key)) continue;
-      warPairs.add(key);
-      const enemy = State.countries[w];
-      if (!enemy) continue;
-      const l = document.createElementNS('http://www.w3.org/2000/svg','line');
-      l.setAttribute('x1', c.cx); l.setAttribute('y1', c.cy);
-      l.setAttribute('x2', enemy.cx); l.setAttribute('y2', enemy.cy);
-      l.setAttribute('class','war-line');
-      warG.appendChild(l);
-    }
-  }
-
-  // 국가 polygon
-  for (const cc in State.countries) {
-    const c = State.countries[cc];
-    const poly = document.createElementNS('http://www.w3.org/2000/svg','polygon');
-    poly.setAttribute('points', c.poly);
-    poly.setAttribute('fill', ownerColor(cc));
-    poly.setAttribute('class','country-shape');
-    poly.setAttribute('data-cc', cc);
-    poly.onclick = () => onCountryClick(cc);
-    cntG.appendChild(poly);
-
-    // 라벨
-    const t = document.createElementNS('http://www.w3.org/2000/svg','text');
-    t.setAttribute('x', c.cx); t.setAttribute('y', c.cy - 6);
-    t.setAttribute('class','country-label');
-    t.textContent = c.shortName;
-    lblG.appendChild(t);
-
-    // 병력 수
-    const a = document.createElementNS('http://www.w3.org/2000/svg','text');
-    a.setAttribute('x', c.cx); a.setAttribute('y', c.cy + 12);
-    a.setAttribute('class','country-army');
-    a.textContent = c.army > 0 ? `⚔ ${Math.round(c.army)}` : '';
-    lblG.appendChild(a);
-  }
-
-  refreshSelection();
-}
-
-function refreshSelection() {
-  document.querySelectorAll('.country-shape').forEach(el => {
-    el.classList.remove('selected','adj-attackable');
+function shout(kind = 'objection') {
+  if (!audioCtx) return;
+  // 음 시퀀스로 외침 효과
+  const base = kind === 'objection' ? 220 : kind === 'takethat' ? 260 : 300;
+  const seq = [base, base * 1.4, base * 1.05, base * 1.6];
+  seq.forEach((f, i) => {
+    setTimeout(() => beep(f, 0.12, 'sawtooth', 0.14), i * 60);
   });
-  if (!State.selectedCC) return;
-  const sel = document.querySelector(`.country-shape[data-cc="${State.selectedCC}"]`);
-  if (sel) sel.classList.add('selected');
+}
+function thump() {
+  if (!audioCtx) return;
+  const osc = audioCtx.createOscillator();
+  const gain = audioCtx.createGain();
+  osc.type = 'triangle';
+  osc.frequency.setValueAtTime(120, audioCtx.currentTime);
+  osc.frequency.exponentialRampToValueAtTime(40, audioCtx.currentTime + 0.25);
+  gain.gain.value = 0.25;
+  gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.3);
+  osc.connect(gain).connect(audioCtx.destination);
+  osc.start();
+  osc.stop(audioCtx.currentTime + 0.3);
+}
 
-  // 플레이어가 본국 선택했을 때 공격 가능한 이웃 표시
-  const player = State.countries[State.playerCC];
-  if (State.selectedCC === State.playerCC || State.countries[State.selectedCC].owner === State.playerCC) {
-    const sc = State.countries[State.selectedCC];
-    for (const n of sc.neighbors) {
-      const nb = State.countries[n];
-      if (nb && player.wars.includes(nb.owner)) {
-        const el = document.querySelector(`.country-shape[data-cc="${n}"]`);
-        if (el) el.classList.add('adj-attackable');
-      }
-    }
+// ===== Helpers =====
+function setHP(newHp) {
+  State.hp = Math.max(0, Math.min(State.maxHp, newHp));
+  const pct = (State.hp / State.maxHp) * 100;
+  hpFill.style.width = pct + '%';
+  hpText.textContent = `${State.hp} / ${State.maxHp}`;
+  hpFill.classList.remove('warning', 'danger');
+  if (pct <= 30) hpFill.classList.add('danger');
+  else if (pct <= 60) hpFill.classList.add('warning');
+}
+
+function setFace(who, emoji) {
+  if (who === 'teacher') teacherFace.textContent = emoji;
+  else if (who === 'student') studentFace.textContent = emoji;
+}
+
+function spotlight(who) {
+  if (who === 'teacher') {
+    teacherSprite.classList.add('active');
+    teacherSprite.classList.remove('dimmed');
+    studentSprite.classList.add('dimmed');
+    studentSprite.classList.remove('active');
+    setTimeout(() => teacherSprite.classList.remove('active'), 600);
+  } else if (who === 'student') {
+    studentSprite.classList.add('active');
+    studentSprite.classList.remove('dimmed');
+    teacherSprite.classList.add('dimmed');
+    teacherSprite.classList.remove('active');
+    setTimeout(() => studentSprite.classList.remove('active'), 600);
+  } else {
+    teacherSprite.classList.remove('dimmed', 'active');
+    studentSprite.classList.remove('dimmed', 'active');
   }
 }
 
-// ============== 사이드바 ==============
-function selectCountry(cc) {
-  State.selectedCC = cc;
-  const c = State.countries[cc];
-  const owner = State.countries[c.owner];
-
-  document.getElementById('cp-name').textContent =
-    c.owner === cc ? c.name : `${c.name} (${owner.name} 점령)`;
-
-  const flagLine = document.getElementById('cp-flag-line');
-  flagLine.innerHTML = `
-    <span class="flag">${FLAGS[c.owner] || FLAGS[cc] || ''}</span>
-    <span>소속: <b style="color:${factionColor(owner.faction)}">${FACTIONS[owner.faction].name}</b></span>
-  `;
-
-  // 통계
-  const isOccupied = c.owner !== cc;
-  const eff = isOccupied ? 0.4 : 1.0; // 점령지는 효율 40%
-  const stats = document.getElementById('cp-stats');
-  stats.innerHTML = `
-    <div class="stat"><span class="stat-label">인력</span><span class="stat-val">${Math.round(c.manpower*eff)}K</span></div>
-    <div class="stat"><span class="stat-label">민간공장</span><span class="stat-val">${Math.round(c.civFactories*eff)}</span></div>
-    <div class="stat"><span class="stat-label">군수공장</span><span class="stat-val">${Math.round(c.milFactories*eff)}</span></div>
-    <div class="stat"><span class="stat-label">주둔 병력</span><span class="stat-val">${Math.round(c.army)}K</span></div>
-  `;
-
-  // 외교 관계
-  const rel = document.getElementById('cp-relations');
-  let html = '';
-  if (owner.wars.length) {
-    html += '<div>전쟁중: ';
-    html += owner.wars.map(w => `<span class="rel-tag rel-war">${State.countries[w].name}</span>`).join('');
-    html += '</div>';
-  }
-  if (owner.allies.length) {
-    html += '<div>동맹: ';
-    html += owner.allies.map(a => `<span class="rel-tag rel-ally">${State.countries[a].name}</span>`).join('');
-    html += '</div>';
-  }
-  if (c.constructions && c.constructions.length) {
-    html += '<div style="margin-top:6px;color:var(--accent-bright)">건설중: ' +
-      c.constructions.map(x => `${x.type==='civ'?'민간공장':'군수공장'}(${x.remaining}개월)`).join(', ') + '</div>';
-  }
-  rel.innerHTML = html;
-
-  renderActions(cc);
-  refreshSelection();
+function shakeSprite(who) {
+  const sp = who === 'teacher' ? teacherSprite : studentSprite;
+  sp.classList.add('shake');
+  setTimeout(() => sp.classList.remove('shake'), 400);
+  thump();
 }
 
-function renderActions(cc) {
-  const div = document.getElementById('actions');
-  div.innerHTML = '';
-  const target = State.countries[cc];
-  const player = State.countries[State.playerCC];
+function flash(kind = 'flash') {
+  courtBg.classList.add(kind);
+  setTimeout(() => courtBg.classList.remove(kind), 500);
+}
 
-  // 자국 행동
-  if (target.owner === State.playerCC) {
-    addAction(div, '🏭 민간공장 건설', `CP ${COSTS.civ}`, player.cp >= COSTS.civ,
-      () => buildFactory(cc, 'civ'));
-    addAction(div, '⚙️ 군수공장 건설', `CP ${COSTS.mil}`, player.cp >= COSTS.mil,
-      () => buildFactory(cc, 'mil'));
-    addAction(div, '👥 병력 모집 (+15K)', `인력 15`, player.manpower >= 15,
-      () => recruit(cc, 15));
-    addAction(div, '👥 대규모 모집 (+50K)', `인력 50`, player.manpower >= 50,
-      () => recruit(cc, 50));
-    return;
-  }
-
-  // 외국
-  const isAtWar = player.wars.includes(target.owner);
-  const adjacent = isPlayerAdjacent(target.cc);
-
-  if (!isAtWar && target.owner !== State.playerCC) {
-    if (!player.allies.includes(target.owner) && target.owner !== State.playerCC) {
-      addAction(div, '⚔️ 선전포고', '', true, () => {
-        declareWar(State.playerCC, target.owner);
-        selectCountry(cc);
-      }, 'danger');
-    }
-    if (target.faction === player.faction && !player.allies.includes(target.owner)) {
-      // 같은 진영이면 동맹 자동
-    } else if (target.faction === 'neutral' && !player.allies.includes(target.owner)) {
-      addAction(div, '🤝 동맹 제안', '', true, () => {
-        if (Math.random() < 0.4) {
-          formAlliance(State.playerCC, target.owner);
-          modal('동맹 체결', `${target.name}이(가) 동맹 제안을 수락했다!`);
-        } else {
-          pushLog(`${target.name}이(가) 우리의 동맹 제안을 거절했다.`, 'important');
-          modal('거절됨', `${target.name}이(가) 동맹 제안을 거절했다.`);
-        }
-        selectCountry(cc);
-      });
+// ===== Dialog (typewriter with skip) =====
+function buildSegments(html) {
+  // Parse HTML into [{ ch, style }] tokens
+  const wrapper = document.createElement('span');
+  wrapper.innerHTML = html;
+  const tokens = [];
+  function walk(node, style) {
+    if (node.nodeType === 3) {
+      for (const ch of node.textContent) tokens.push({ ch, style });
+    } else if (node.nodeType === 1) {
+      const cls = node.getAttribute('class') || style;
+      for (const c of node.childNodes) walk(c, cls);
     }
   }
+  walk(wrapper, '');
+  return tokens;
+}
+function renderTokens(tokens, n) {
+  let buf = '';
+  let lastCls = '';
+  for (let i = 0; i < n && i < tokens.length; i++) {
+    const { ch, style } = tokens[i];
+    if (style !== lastCls) {
+      if (lastCls) buf += '</span>';
+      if (style) buf += `<span class="${style}">`;
+      lastCls = style;
+    }
+    buf += ch === '\n' ? '<br>' : escapeChar(ch);
+  }
+  if (lastCls) buf += '</span>';
+  return buf;
+}
+function escapeChar(c) {
+  if (c === '<') return '&lt;';
+  if (c === '>') return '&gt;';
+  if (c === '&') return '&amp;';
+  return c;
+}
 
-  if (isAtWar) {
-    if (adjacent) {
-      addAction(div, `⚔️ ${target.name} 공격`, '병력 사용', true, () => {
-        attackCountry(State.playerCC, target.cc);
-      }, 'danger');
+function say(speakerKey, displayName, face, htmlText) {
+  return new Promise((resolve) => {
+    speakerName.textContent = displayName;
+    if (speakerKey === 'teacher' || speakerKey === 'student') {
+      spotlight(speakerKey);
+      if (face) setFace(speakerKey, face);
     } else {
-      addAction(div, '🚫 인접하지 않음', '', false, ()=>{});
+      spotlight(null);
     }
-    addAction(div, '🕊️ 강화 제안', '', true, () => {
-      proposePeace(State.playerCC, target.owner);
-      selectCountry(cc);
+
+    const tokens = buildSegments(htmlText);
+    let i = 0;
+    let timer = null;
+    let done = false;
+    State.typing = true;
+    dialogText.innerHTML = '';
+    dialogNext.classList.add('hidden');
+
+    function tick() {
+      i++;
+      dialogText.innerHTML = renderTokens(tokens, i);
+      if (i % 3 === 0 && tokens[i - 1] && tokens[i - 1].ch.trim()) {
+        beep(660 + Math.random() * 80, 0.02, 'square', 0.03);
+      }
+      if (i >= tokens.length) {
+        finishTyping();
+        return;
+      }
+      timer = setTimeout(tick, 22);
+    }
+    function finishTyping() {
+      if (timer) { clearTimeout(timer); timer = null; }
+      i = tokens.length;
+      dialogText.innerHTML = renderTokens(tokens, i);
+      State.typing = false;
+      dialogNext.classList.remove('hidden');
+    }
+    function onAdvance(e) {
+      if (e && e.target && (
+        e.target.closest('#choices') ||
+        e.target.closest('#action-bar') ||
+        e.target.closest('#evidence-panel')
+      )) return;
+      if (State.typing) {
+        finishTyping();
+        return;
+      }
+      if (done) return;
+      done = true;
+      document.removeEventListener('click', onAdvance);
+      document.removeEventListener('keydown', onKey);
+      resolve();
+    }
+    function onKey(e) {
+      if (e.code === 'Space' || e.code === 'Enter') {
+        e.preventDefault();
+        onAdvance({ target: document.body });
+      }
+    }
+    document.addEventListener('click', onAdvance);
+    document.addEventListener('keydown', onKey);
+    timer = setTimeout(tick, 22);
+  });
+}
+
+// ===== Overlays =====
+function showOverlay(id, ms = 1100) {
+  const el = document.getElementById(id);
+  el.classList.remove('hidden');
+  // restart animation
+  const inner = el.firstElementChild;
+  inner.style.animation = 'none';
+  // force reflow
+  void inner.offsetWidth;
+  inner.style.animation = '';
+  return new Promise((resolve) => {
+    setTimeout(() => {
+      el.classList.add('hidden');
+      resolve();
+    }, ms);
+  });
+}
+
+async function objection() {
+  flash('redflash');
+  shout('objection');
+  shakeSprite('student');
+  await showOverlay('objection-overlay', 1200);
+}
+async function takeThat() {
+  flash('flash');
+  shout('takethat');
+  shakeSprite('teacher');
+  await showOverlay('takethat-overlay', 1200);
+}
+async function holdIt() {
+  flash('flash');
+  shout('holdit');
+  await showOverlay('holdit-overlay', 900);
+}
+
+// ===== Choices =====
+function showChoices(options, label = null) {
+  return new Promise((resolve) => {
+    choicesEl.innerHTML = '';
+    choicesEl.classList.remove('hidden');
+    options.forEach((opt, i) => {
+      const btn = document.createElement('button');
+      btn.className = 'choice-btn';
+      btn.textContent = `${i + 1}. ${opt.text}`;
+      btn.onclick = () => {
+        choicesEl.classList.add('hidden');
+        beep(660, 0.06, 'square', 0.1);
+        resolve(opt);
+      };
+      choicesEl.appendChild(btn);
     });
-  }
-}
-
-function addAction(parent, label, cost, enabled, fn, cls='') {
-  const b = document.createElement('button');
-  b.className = 'action-btn ' + cls;
-  b.innerHTML = `<span>${label}</span>${cost?`<span class="cost">${cost}</span>`:''}`;
-  b.disabled = !enabled;
-  b.onclick = fn;
-  parent.appendChild(b);
-}
-
-function isPlayerAdjacent(targetCC) {
-  // 플레이어가 소유한 영토의 이웃 중에 target이 있는가
-  for (const cc in State.countries) {
-    const c = State.countries[cc];
-    if (c.owner !== State.playerCC) continue;
-    if (c.neighbors.includes(targetCC)) return true;
-  }
-  return false;
-}
-
-function onCountryClick(cc) {
-  selectCountry(cc);
-}
-
-// ============== 게임 메커니즘 ==============
-const COSTS = {
-  civ: 80,
-  mil: 120
-};
-
-function pushLog(msg, type='') {
-  State.log.unshift({ msg, type });
-  if (State.log.length > 30) State.log.pop();
-  renderLog();
-}
-
-function renderLog() {
-  const ul = document.getElementById('log');
-  ul.innerHTML = '';
-  for (const e of State.log) {
-    const li = document.createElement('li');
-    li.className = e.type;
-    li.textContent = e.msg;
-    ul.appendChild(li);
-  }
-}
-
-function updateTopBar() {
-  const p = State.countries[State.playerCC];
-  document.getElementById('date-display').textContent = `${State.year}년 ${State.month}월`;
-  document.getElementById('r-manpower').textContent = Math.round(p.manpower);
-  document.getElementById('r-civ').textContent = p.civFactories;
-  document.getElementById('r-mil').textContent = p.milFactories;
-  document.getElementById('r-cp').textContent = Math.round(p.cp);
-  document.getElementById('r-army').textContent = Math.round(p.army);
-}
-
-function declareWar(aCC, bCC, silent=false) {
-  const a = State.countries[aCC], b = State.countries[bCC];
-  if (!a || !b) return;
-  if (!a.wars.includes(bCC)) a.wars.push(bCC);
-  if (!b.wars.includes(aCC)) b.wars.push(aCC);
-  // 동맹국도 참전
-  for (const ally of [...a.allies]) {
-    if (!State.countries[ally].wars.includes(bCC)) {
-      State.countries[ally].wars.push(bCC);
-      State.countries[bCC].wars.push(ally);
-    }
-  }
-  for (const ally of [...b.allies]) {
-    if (!State.countries[ally].wars.includes(aCC)) {
-      State.countries[ally].wars.push(aCC);
-      State.countries[aCC].wars.push(ally);
-    }
-  }
-  if (!silent) {
-    pushLog(`${a.name}이(가) ${b.name}에 선전포고했다!`, 'war');
-  }
-  renderMap();
-}
-
-function formAlliance(aCC, bCC) {
-  const a = State.countries[aCC], b = State.countries[bCC];
-  if (!a.allies.includes(bCC)) a.allies.push(bCC);
-  if (!b.allies.includes(aCC)) b.allies.push(aCC);
-  // 진영 통일
-  if (a.faction !== 'neutral') b.faction = a.faction;
-  else if (b.faction !== 'neutral') a.faction = b.faction;
-  pushLog(`${a.name}와(과) ${b.name}이(가) 동맹을 맺었다.`, 'important');
-  renderMap();
-}
-
-function proposePeace(aCC, bCC) {
-  const a = State.countries[aCC], b = State.countries[bCC];
-  // 양측 전력 비교
-  const aStr = totalStrength(aCC);
-  const bStr = totalStrength(bCC);
-  // 강자가 약자에게 강화 제안하면 거의 항상 수락
-  // 약자가 강자에게 제안하면 강자의 야망에 따라
-  const ratio = aStr / (aStr + bStr);
-  let accept = false;
-  if (ratio < 0.4) accept = true; // 약자가 제안 → 강자가 수락 (자비)
-  else if (ratio > 0.6) accept = Math.random() < 0.3; // 강자가 제안 → 약자가 수락
-  else accept = Math.random() < 0.5;
-
-  if (accept) {
-    makePeace(aCC, bCC);
-    modal('강화 성립', `${a.name}와(과) ${b.name}이(가) 강화조약을 체결했다.`);
-  } else {
-    pushLog(`${b.name}이(가) 강화 제안을 거절했다.`, 'important');
-    modal('거절됨', `${b.name}이(가) 강화 제안을 거절했다.`);
-  }
-}
-
-function makePeace(aCC, bCC) {
-  const a = State.countries[aCC], b = State.countries[bCC];
-  a.wars = a.wars.filter(w => w !== bCC);
-  b.wars = b.wars.filter(w => w !== aCC);
-  pushLog(`${a.name}와(과) ${b.name}이(가) 강화조약을 체결했다.`, 'important');
-  renderMap();
-}
-
-function totalStrength(cc) {
-  // cc 소유의 모든 영토 합계
-  let mp=0, fc=0, mf=0, ar=0;
-  for (const k in State.countries) {
-    const c = State.countries[k];
-    if (c.owner === cc) {
-      const eff = (k===cc) ? 1.0 : 0.4;
-      mp += c.manpower * eff;
-      fc += c.civFactories * eff;
-      mf += c.milFactories * eff;
-      ar += c.army; // 군은 그대로
-    }
-  }
-  return ar * 1.5 + mp * 0.3 + fc + mf * 2;
-}
-
-function buildFactory(cc, type) {
-  const player = State.countries[State.playerCC];
-  const cost = COSTS[type];
-  if (player.cp < cost) return;
-  player.cp -= cost;
-  const target = State.countries[cc];
-  target.constructions = target.constructions || [];
-  target.constructions.push({ type, remaining: type==='civ'?3:4 });
-  pushLog(`${target.name}에 ${type==='civ'?'민간공장':'군수공장'} 건설 시작.`);
-  updateTopBar();
-  selectCountry(cc);
-}
-
-function recruit(cc, n) {
-  const player = State.countries[State.playerCC];
-  if (player.manpower < n) return;
-  player.manpower -= n;
-  const target = State.countries[cc];
-  target.army += n;
-  pushLog(`${target.name}에서 ${n}K 병력을 모집했다.`);
-  updateTopBar();
-  selectCountry(cc);
-  renderMap();
-}
-
-// ============== 전투 ==============
-function attackCountry(attackerCC, defenderCC) {
-  const att = State.countries[attackerCC]; // 공격국 (수도)
-  const def = State.countries[defenderCC]; // 방어 영토 (개별)
-  const defOwner = State.countries[def.owner];
-
-  if (att.army < 5) {
-    modal('병력 부족', '공격하려면 최소 5K의 병력이 필요하다.');
-    return;
-  }
-
-  // 인접한 자국 영토에서 출격 (가장 가까운)
-  let originCC = attackerCC;
-  let originDist = 9999;
-  for (const cc in State.countries) {
-    const c = State.countries[cc];
-    if (c.owner !== attackerCC) continue;
-    if (!c.neighbors.includes(defenderCC)) continue;
-    if (c.army < 5) continue;
-    const d = Math.hypot(c.cx-def.cx, c.cy-def.cy);
-    if (d < originDist) { originDist = d; originCC = cc; }
-  }
-  const origin = State.countries[originCC];
-
-  // 투입 병력: origin 보유의 70%
-  const sent = Math.floor(origin.army * 0.7);
-  if (sent < 5) {
-    modal('전선 병력 부족', `${origin.name} 전선의 병력이 부족하다.`);
-    return;
-  }
-
-  // 전투 계산
-  const attRoll = sent * (0.8 + Math.random()*0.5);
-  const defRoll = def.army * 1.3 * (0.8 + Math.random()*0.5);
-  const totalCasualties = Math.min(sent, def.army) * 0.4;
-
-  let result;
-  if (attRoll > defRoll) {
-    // 공격 성공
-    const attLoss = Math.round(totalCasualties * 0.6);
-    const defLoss = Math.round(def.army);
-    origin.army = Math.max(0, origin.army - attLoss);
-    def.army = 0;
-    // 점령
-    const prevOwner = def.owner;
-    def.owner = attackerCC;
-    pushLog(`⚔️ ${att.name}이(가) ${def.name}을(를) 점령! (피해 ${attLoss}K)`, 'victory');
-
-    // 본국 점령시 강제 강화 / 멸망
-    if (defenderCC === defOwner.cc) {
-      onCapitalFall(defenderCC, attackerCC);
-    }
-    result = 'win';
-  } else {
-    // 공격 실패
-    const attLoss = Math.round(totalCasualties * 1.0);
-    const defLoss = Math.round(totalCasualties * 0.5);
-    origin.army = Math.max(0, origin.army - attLoss);
-    def.army = Math.max(0, def.army - defLoss);
-    pushLog(`✗ ${att.name}의 ${def.name} 공격 실패! (아군 ${attLoss}K, 적 ${defLoss}K 손실)`, 'war');
-    result = 'lose';
-  }
-
-  updateTopBar();
-  renderMap();
-  selectCountry(defenderCC);
-  return result;
-}
-
-function onCapitalFall(fallenCC, conquerorCC) {
-  const fallen = State.countries[fallenCC];
-  const conqueror = State.countries[conquerorCC];
-  pushLog(`💀 ${fallen.name}의 수도가 함락! 정부가 항복했다.`, 'victory');
-
-  // fallen이 소유한 모든 영토를 conqueror로 이전
-  for (const cc in State.countries) {
-    const c = State.countries[cc];
-    if (c.owner === fallenCC) c.owner = conquerorCC;
-  }
-  // 동맹/전쟁 정리
-  fallen.wars.forEach(w => {
-    State.countries[w].wars = State.countries[w].wars.filter(x => x !== fallenCC);
   });
-  fallen.wars = [];
-  fallen.allies.forEach(a => {
-    State.countries[a].allies = State.countries[a].allies.filter(x => x !== fallenCC);
+}
+
+function showActionBar() {
+  return new Promise((resolve) => {
+    actionBar.classList.remove('hidden');
+    const handlers = {};
+    actionBar.querySelectorAll('.action-btn').forEach((btn) => {
+      const action = btn.dataset.action;
+      const h = () => {
+        actionBar.classList.add('hidden');
+        actionBar.querySelectorAll('.action-btn').forEach((b) => {
+          b.removeEventListener('click', handlers[b.dataset.action]);
+        });
+        beep(880, 0.06, 'square', 0.1);
+        resolve(action);
+      };
+      handlers[action] = h;
+      btn.addEventListener('click', h);
+    });
   });
-  fallen.allies = [];
+}
 
-  if (fallenCC === State.playerCC) {
-    gameOver(false);
+function showEvidence() {
+  return new Promise((resolve) => {
+    evidenceList.innerHTML = '';
+    const keys = Object.keys(State.inventory).filter((k) => State.inventory[k]);
+    if (keys.length === 0) {
+      const empty = document.createElement('div');
+      empty.style.cssText = 'grid-column: 1/-1; text-align:center; color:#888; padding:20px;';
+      empty.textContent = '(가진 증거가 없다...)';
+      evidenceList.appendChild(empty);
+    }
+    keys.forEach((k) => {
+      const ev = EVIDENCE[k];
+      const item = document.createElement('div');
+      item.className = 'evidence-item';
+      item.innerHTML = `<div class="evidence-icon">${ev.icon}</div><div class="evidence-name">${ev.name}</div>`;
+      item.title = ev.desc;
+      item.onclick = () => {
+        evidencePanel.classList.add('hidden');
+        beep(880, 0.06, 'square', 0.1);
+        resolve(k);
+      };
+      evidenceList.appendChild(item);
+    });
+    evidencePanel.classList.remove('hidden');
+    const cancel = $('#cancel-evidence');
+    const onCancel = () => {
+      cancel.removeEventListener('click', onCancel);
+      evidencePanel.classList.add('hidden');
+      resolve(null);
+    };
+    cancel.addEventListener('click', onCancel);
+  });
+}
+
+// ===== Main flow =====
+async function startGame() {
+  ensureAudio();
+  titleScreen.classList.add('hidden');
+  gameScreen.classList.remove('hidden');
+  State.hp = State.maxHp = 100;
+  State.roundIndex = 0;
+  State.honestWin = false;
+  // 학생은 모든 증거를 보유
+  State.inventory = {};
+  Object.keys(EVIDENCE).forEach((k) => { State.inventory[k] = true; });
+  setHP(100);
+
+  // 인트로
+  for (const line of INTRO_SCRIPT) {
+    if (line.speaker === 'narrator') {
+      await say('narrator', line.name, null, line.text);
+    } else if (line.speaker === 'teacher') {
+      await say('teacher', line.name, line.face, line.text);
+    } else {
+      await say('student', line.name, line.face, line.text);
+    }
+    if (State.hp <= 0) break;
+  }
+
+  // 라운드 진행
+  for (State.roundIndex = 0; State.roundIndex < ROUNDS.length; State.roundIndex++) {
+    if (State.hp <= 0) break;
+    const finished = await playRound(ROUNDS[State.roundIndex]);
+    if (finished === 'honest') { State.honestWin = true; break; }
+    if (State.hp <= 0) break;
+  }
+
+  await endGame();
+}
+
+async function playRound(round) {
+  State.currentRound = round;
+  // 선생님의 질문
+  await say('teacher', '영어학원 선생님', round.question.face, round.question.text);
+
+  // 학생이 변명 선택
+  await say('narrator', '— 변명을 선택하라 —', null, '어떻게 대답할 것인가...?');
+  const excuse = await showChoices(round.excuses);
+  State.currentExcuse = excuse;
+
+  // 학생이 변명을 말함
+  await say('student', '학생 (나)', '😬', excuse.studentLine);
+
+  // 선생님이 OBJECTION! → AI 반박
+  await objection();
+  await say('teacher', '영어학원 선생님', excuse.rebuttal.face, excuse.rebuttal.text);
+
+  // 정직 자백은 즉시 honest 엔딩으로
+  if (excuse.honest) {
+    setHP(State.hp - excuse.damage);
+    await say('student', '학생 (나)', '😌', '...정말 죄송합니다. 다음부터는 미리 할게요.');
+    return 'honest';
+  }
+
+  // 학생 행동 선택 루프
+  let resolved = false;
+  while (!resolved) {
+    if (State.hp <= 0) break;
+    await say('narrator', '— 어떻게 대응할 것인가? —', null,
+      '<span class="emph">이의제기</span>: 말로 반박 (도박)\n<span class="emph">증거제출</span>: 인벤토리에서 증거 제시 (정공법)\n<span class="emph">자백</span>: 변명 포기 (피해 최소)');
+    const action = await showActionBar();
+
+    if (action === 'argue') {
+      // 말로 반박 — 약점이 없으면 큰 피해
+      await holdIt();
+      await say('student', '학생 (나)', '😤', '잠깐만요! 그건 말이 안 돼요! 그러니까... 어... 그게...');
+      if (excuse.weakness) {
+        // 증거가 필요한데 말로만 반박 → 부분 피해
+        setHP(State.hp - Math.floor(excuse.damage * 0.7));
+        await say('teacher', '영어학원 선생님', '😏',
+          '<span class="emph">근거가 뭐냐?</span> ChatGPT는 근거 없는 주장을 인정하지 않는다.');
+        resolved = false;  // 다시 선택
+      } else {
+        // 약점이 없다 = 그 변명은 어차피 반박 불가
+        setHP(State.hp - excuse.damage);
+        await say('teacher', '영어학원 선생님', '😤', '말장난은 그만하자.');
+        resolved = true;
+      }
+    } else if (action === 'evidence') {
+      const key = await showEvidence();
+      if (!key) continue;
+      const ev = EVIDENCE[key];
+      // 일치하는 증거인가?
+      if (excuse.weakness && ev.counters.includes(excuse.weakness)) {
+        await takeThat();
+        await say('student', '학생 (나)', '😎', ev.counterLine);
+        await say('teacher', '영어학원 선생님', '😱',
+          '<span class="emph">뭐... 뭐라고?!</span> 이... 이건 예상 못 했다!');
+        await say('teacher', '영어학원 선생님', '😣',
+          '(ChatGPT한테 어떻게 반박해야 하지... 으...) 좋다, 이 라운드는 너의 승리다.');
+        // 적중 보너스
+        setHP(State.hp + 10);
+        resolved = true;
+      } else {
+        // 엉뚱한 증거
+        setHP(State.hp - 20);
+        await say('teacher', '영어학원 선생님', '😏',
+          `<span class="emph">${ev.name}?</span> 그게 지금 이 변명이랑 무슨 상관이지?`);
+        resolved = false;
+      }
+    } else if (action === 'admit') {
+      setHP(State.hp - Math.floor(excuse.damage * 0.4));
+      await say('student', '학생 (나)', '😞', '...죄송해요. 그 변명은 거짓말이었어요.');
+      await say('teacher', '영어학원 선생님', '😐', '솔직한 건 봐주마. 하지만 점수는 깎인다.');
+      resolved = true;
+    }
+  }
+  return 'continue';
+}
+
+async function endGame() {
+  let ending;
+  if (State.honestWin) ending = ENDINGS.honest;
+  else if (State.hp <= 0) ending = ENDINGS.lose;
+  else ending = ENDINGS.win;
+
+  // 결말 대사
+  spotlight(null);
+  if (ending === ENDINGS.win) {
+    await say('teacher', '영어학원 선생님', '😵', '...내... 내가 졌다. 너의 변론은 완벽했다.');
+    await say('teacher', '영어학원 선생님', '😈', '하지만 다음 주 숙제는 두 배다.');
+    await say('student', '학생 (나)', '😎', '(이겼다... 하지만 진정한 적은 다음 주의 나다...)');
+  } else if (ending === ENDINGS.lose) {
+    await say('teacher', '영어학원 선생님', '😤', '신뢰도 0. <span class="emph">유죄!</span>');
+    await say('teacher', '영어학원 선생님', '📞', '어머님께 전화 한 통 드릴게.');
+    await say('student', '학생 (나)', '😭', '아아... 끝났다...');
   } else {
-    checkVictory();
-  }
-}
-
-// ============== 턴 진행 ==============
-function nextTurn() {
-  if (State.gameOver) return;
-  State.turn++;
-
-  // 1. 건설 진행
-  for (const cc in State.countries) {
-    const c = State.countries[cc];
-    if (!c.constructions) continue;
-    const completed = [];
-    for (const con of c.constructions) {
-      con.remaining--;
-      if (con.remaining <= 0) {
-        completed.push(con);
-        if (con.type === 'civ') c.civFactories++;
-        else c.milFactories++;
-      }
-    }
-    c.constructions = c.constructions.filter(x => !completed.includes(x));
-    if (completed.length && c.owner === State.playerCC) {
-      pushLog(`${c.name}에서 ${completed.length}개 공장 건설 완료!`, 'important');
-    }
+    await say('student', '학생 (나)', '🙏', '정말 죄송해요. 다음부터는 절대 안 까먹을게요.');
+    await say('teacher', '영어학원 선생님', '😌', '...그래. 가봐.');
   }
 
-  // 2. 생산: 각 국가가 자기 소유의 모든 영토에서 수확
-  for (const ownerCC in State.countries) {
-    if (State.countries[ownerCC].owner !== ownerCC) continue; // 멸망국 스킵
-    const owner = State.countries[ownerCC];
-    let totalCiv = 0, totalMil = 0, totalMpRegen = 0;
-    for (const tcc in State.countries) {
-      const t = State.countries[tcc];
-      if (t.owner !== ownerCC) continue;
-      const eff = (tcc === ownerCC) ? 1.0 : 0.4;
-      totalCiv += t.civFactories * eff;
-      totalMil += t.milFactories * eff;
-      totalMpRegen += t.manpower * 0.005 * eff;
-    }
-    // 건설점수
-    owner.cp += totalCiv * 5;
-    // 군수공장 → 병력 자동 보충 (수도)
-    const equip = totalMil * 2;
-    const recruitable = Math.min(equip, owner.manpower);
-    owner.army += recruitable;
-    owner.manpower -= recruitable;
-    // 인력 회복
-    owner.manpower += totalMpRegen;
-  }
-
-  // 3. AI 행동
-  aiActions();
-
-  // 4. 전투 자동 (AI vs AI)
-  aiCombat();
-
-  // 5. 시간 진행
-  State.month++;
-  if (State.month > 12) { State.month = 1; State.year++; }
-
-  // 6. 승리 체크
-  checkVictory();
-
-  updateTopBar();
-  renderMap();
-  if (State.selectedCC) selectCountry(State.selectedCC);
-}
-
-// ============== AI ==============
-function aiActions() {
-  for (const cc in State.countries) {
-    if (cc === State.playerCC) continue;
-    const c = State.countries[cc];
-    if (c.owner !== cc) continue; // 멸망
-    if (!c.ai) continue;
-
-    // 진영 자동 합류 (전쟁이 격화되면)
-    if (c.wantsFaction && c.faction === 'neutral') {
-      // 일정 확률로 합류
-      if (Math.random() < 0.04 * (State.turn / 6 + 1)) {
-        joinFaction(cc, c.wantsFaction);
-      }
-    }
-
-    // 건설
-    if (c.cp >= COSTS.mil && Math.random() < 0.6) {
-      c.cp -= COSTS.mil;
-      c.constructions = c.constructions || [];
-      c.constructions.push({ type:'mil', remaining: 4 });
-    } else if (c.cp >= COSTS.civ && Math.random() < 0.7) {
-      c.cp -= COSTS.civ;
-      c.constructions = c.constructions || [];
-      c.constructions.push({ type:'civ', remaining: 3 });
-    }
-
-    // 모집
-    if (c.manpower >= 30 && Math.random() < 0.5) {
-      const n = Math.min(30, c.manpower);
-      c.manpower -= n; c.army += n;
-    }
-
-    // 선전포고: AI의 target 리스트에서 약한 이웃 침공
-    if (c.ai.target.length && c.wars.length < 3 && Math.random() < c.ai.aggression * 0.08) {
-      for (const tg of c.ai.target) {
-        const t = State.countries[tg];
-        if (!t || t.owner !== tg) continue;
-        if (c.wars.includes(tg)) continue;
-        // 인접한지 확인 (자국 또는 점령지에서)
-        let adj = false;
-        for (const k in State.countries) {
-          if (State.countries[k].owner === cc && State.countries[k].neighbors.includes(tg)) { adj = true; break; }
-        }
-        if (!adj) continue;
-        // 전력 비교
-        if (totalStrength(cc) > totalStrength(tg) * 0.7) {
-          declareWar(cc, tg);
-          break;
-        }
-      }
-    }
-  }
-}
-
-function joinFaction(cc, faction) {
-  const c = State.countries[cc];
-  c.faction = faction;
-  pushLog(`📢 ${c.name}이(가) ${FACTIONS[faction].name}에 가담했다!`, 'important');
-  // 진영 동맹 자동 연결
-  for (const k in State.countries) {
-    const o = State.countries[k];
-    if (k === cc) continue;
-    if (o.faction === faction && o.owner === k) {
-      if (!c.allies.includes(k)) c.allies.push(k);
-      if (!o.allies.includes(cc)) o.allies.push(cc);
-      // 적의 적과 자동 전쟁
-      for (const e of o.wars) {
-        if (State.countries[e].faction && State.countries[e].faction !== faction && !c.wars.includes(e)) {
-          declareWar(cc, e, true);
-        }
-      }
-    }
-  }
-  renderMap();
-}
-
-function aiCombat() {
-  // 각 AI 국가는 자기 전쟁 상대 중 인접한 약한 영토를 공격
-  const order = Object.keys(State.countries).sort(()=>Math.random()-0.5);
-  for (const cc of order) {
-    if (cc === State.playerCC) continue;
-    const c = State.countries[cc];
-    if (c.owner !== cc) continue;
-    if (!c.wars.length) continue;
-    if (c.army < 10) continue;
-
-    // 인접한 적 영토들
-    const targets = [];
-    for (const k in State.countries) {
-      const t = State.countries[k];
-      if (!c.wars.includes(t.owner)) continue;
-      // 자국 또는 점령지에서 인접
-      for (const j in State.countries) {
-        if (State.countries[j].owner !== cc) continue;
-        if (State.countries[j].neighbors.includes(k)) { targets.push(k); break; }
-      }
-    }
-    if (!targets.length) continue;
-
-    // 약한 영토 우선
-    targets.sort((a,b) => State.countries[a].army - State.countries[b].army);
-    const target = targets[0];
-    const aggression = c.ai ? c.ai.aggression : 0.5;
-    if (Math.random() < aggression * 0.6) {
-      attackCountry(cc, target);
-    }
-  }
-}
-
-// ============== 승리/패배 ==============
-function checkVictory() {
-  const player = State.countries[State.playerCC];
-  const playerFaction = player.faction;
-
-  // 모든 강대국이 같은 진영이거나 점령됨?
-  const majors = ['GER','GBR','FRA','ITA','USR','POL'];
-  let allConquered = true;
-  for (const m of majors) {
-    if (m === State.playerCC) continue;
-    const c = State.countries[m];
-    if (c.owner === m) {
-      // 살아있음. 같은 진영인지 확인
-      if (c.faction !== playerFaction || playerFaction === 'neutral') {
-        // 같은 진영도 아니고 점령도 안됐으면 미완성
-        allConquered = false;
-        break;
-      }
-    } else if (State.countries[c.owner].faction !== playerFaction) {
-      allConquered = false;
-      break;
-    }
-  }
-
-  if (allConquered) {
-    gameOver(true);
-    return;
-  }
-
-  // 1948년까지 진행되면 평화
-  if (State.year >= 1948) {
-    gameOver(null);
-  }
-}
-
-function gameOver(win) {
-  State.gameOver = true;
-  if (win === true) {
-    modal('🏆 승리!', `${State.year}년 ${State.month}월, ${State.countries[State.playerCC].name}이(가) 유럽의 패권을 차지했다!`);
-  } else if (win === false) {
-    modal('💀 패배', `${State.countries[State.playerCC].name}의 수도가 함락되었다. 우리의 전쟁은 끝났다.`);
+  // 평결 화면
+  gameScreen.classList.add('hidden');
+  verdictScreen.classList.remove('hidden');
+  const title = $('#verdict-title');
+  title.textContent = ending.title;
+  title.className = '';
+  title.classList.add(ending.titleClass);
+  $('#verdict-desc').textContent = ending.desc;
+  // 효과음
+  if (ending === ENDINGS.lose) {
+    shout('objection');
   } else {
-    modal('🕊️ 종전', `1948년, 전쟁은 결판없이 끝났다.`);
+    shout('takethat');
   }
 }
 
-// ============== 모달 ==============
-function modal(title, body) {
-  document.getElementById('modal-title').textContent = title;
-  document.getElementById('modal-body').textContent = body;
-  document.getElementById('modal').classList.remove('hidden');
-}
+// ===== Init =====
+$('#start-btn').addEventListener('click', (e) => {
+  e.stopPropagation();
+  ensureAudio();
+  // 다음 tick에 startGame을 호출해서 이 click 이벤트가
+  // 다이얼로그 advance로 잘못 잡히지 않게 한다.
+  setTimeout(startGame, 0);
+});
+$('#restart-btn').addEventListener('click', (e) => {
+  e.stopPropagation();
+  verdictScreen.classList.add('hidden');
+  titleScreen.classList.remove('hidden');
+});
 
-// ============== 초기화 ==============
-document.addEventListener('DOMContentLoaded', () => {
-  renderStartScreen();
-  document.getElementById('next-turn-btn').onclick = nextTurn;
-  document.getElementById('modal-close').onclick = () => {
-    document.getElementById('modal').classList.add('hidden');
-    if (State.gameOver) {
-      // 시작 화면으로 복귀
-      document.getElementById('game-screen').classList.add('hidden');
-      document.getElementById('start-screen').classList.remove('hidden');
-      State.gameOver = false;
-      State.year = 1939; State.month = 9; State.turn = 0;
-      State.log = []; State.selectedCC = null;
-    }
-  };
+// 키보드: 숫자키로 선택지 선택
+document.addEventListener('keydown', (e) => {
+  if (choicesEl.classList.contains('hidden')) return;
+  const n = parseInt(e.key, 10);
+  if (n >= 1 && n <= 9) {
+    const btn = choicesEl.querySelectorAll('.choice-btn')[n - 1];
+    if (btn) btn.click();
+  }
 });
