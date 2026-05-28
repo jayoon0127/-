@@ -4,11 +4,16 @@
 const State = {
   hp: 100,
   maxHp: 100,
+  teacherHp: 100,    // 선생님 자신감 게이지
+  teacherMaxHp: 100,
   round: 0,
-  conversation: [],  // [{role: 'user'|'assistant', content: string}, ...] — 내부 형식, 호출 시 Gemini 형식으로 변환
+  conversation: [],  // [{role, content, image?}, ...] — 내부 형식, 호출 시 Gemini 형식으로 변환
   typing: false,
   busy: false,       // API 호출 중
 };
+
+// 현재 입력에 첨부된 이미지 증거 (없으면 null)
+let attachedImage = null;
 
 const LS_KEY = 'aceattorney_hw_gemini_apikey';
 const LS_MODEL = 'aceattorney_hw_gemini_model';
@@ -28,7 +33,15 @@ const teacherFace = $('#teacher-face');
 const studentFace = $('#student-face');
 const hpFill = $('#hp-fill');
 const hpText = $('#hp-text');
+const teacherHpFill = $('#teacher-hp-fill');
+const teacherHpText = $('#teacher-hp-text');
 const roundText = $('#round-text');
+const fileInput = $('#file-input');
+const attachBtn = $('#attach-btn');
+const attachPreview = $('#attach-preview');
+const attachThumb = $('#attach-thumb');
+const attachName = $('#attach-name');
+const attachClear = $('#attach-clear');
 const courtBg = $('#court-bg');
 const inputArea = $('#input-area');
 const studentInput = $('#student-input');
@@ -86,6 +99,12 @@ function setHP(newHp) {
   hpFill.classList.remove('warning', 'danger');
   if (pct <= 30) hpFill.classList.add('danger');
   else if (pct <= 60) hpFill.classList.add('warning');
+}
+function setTeacherHP(newHp) {
+  State.teacherHp = Math.max(0, Math.min(State.teacherMaxHp, newHp));
+  const pct = (State.teacherHp / State.teacherMaxHp) * 100;
+  teacherHpFill.style.width = pct + '%';
+  teacherHpText.textContent = `${State.teacherHp} / ${State.teacherMaxHp}`;
 }
 function setRound(n) {
   State.round = n;
@@ -267,6 +286,43 @@ async function holdIt() {
   await showOverlay('holdit-overlay', 900);
 }
 
+// ===== 이미지 첨부 =====
+function readImageFile(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const dataUrl = String(reader.result);
+      const comma = dataUrl.indexOf(',');
+      resolve({
+        mimeType: file.type || 'image/png',
+        data: dataUrl.slice(comma + 1),
+        dataUrl,
+        name: file.name
+      });
+    };
+    reader.onerror = () => reject(new Error('파일 읽기 실패'));
+    reader.readAsDataURL(file);
+  });
+}
+function clearAttachment() {
+  attachedImage = null;
+  if (fileInput) fileInput.value = '';
+  attachThumb.classList.add('hidden');
+  attachThumb.removeAttribute('src');
+  attachName.textContent = '';
+  attachName.classList.remove('attach-error');
+  attachPreview.classList.add('hidden');
+}
+function showAttachError(msg) {
+  attachedImage = null;
+  if (fileInput) fileInput.value = '';
+  attachThumb.classList.add('hidden');
+  attachThumb.removeAttribute('src');
+  attachName.textContent = msg;
+  attachName.classList.add('attach-error');
+  attachPreview.classList.remove('hidden');
+}
+
 // ===== Input =====
 function showInput() {
   return new Promise((resolve) => {
@@ -275,23 +331,54 @@ function showInput() {
     studentInput.disabled = false;
     submitBtn.disabled = false;
     giveupBtn.disabled = false;
+    clearAttachment();
     setTimeout(() => studentInput.focus(), 50);
+
+    async function onFileChange() {
+      const file = fileInput.files && fileInput.files[0];
+      if (!file) return;
+      if (!file.type.startsWith('image/')) {
+        showAttachError('이미지 파일만 첨부할 수 있습니다.');
+        return;
+      }
+      if (file.size > 5 * 1024 * 1024) {
+        showAttachError('이미지는 최대 5MB까지 가능합니다.');
+        return;
+      }
+      try {
+        attachedImage = await readImageFile(file);
+        attachThumb.src = attachedImage.dataUrl;
+        attachThumb.classList.remove('hidden');
+        attachName.textContent = attachedImage.name;
+        attachName.classList.remove('attach-error');
+        attachPreview.classList.remove('hidden');
+        beep(720, 0.05, 'square', 0.08);
+      } catch (e) {
+        showAttachError('파일을 읽지 못했습니다.');
+      }
+    }
+    function onAttachClick() { fileInput.click(); }
+    function onAttachClear() { clearAttachment(); studentInput.focus(); }
 
     function cleanup() {
       submitBtn.removeEventListener('click', onSubmit);
       giveupBtn.removeEventListener('click', onGiveUp);
       studentInput.removeEventListener('keydown', onKey);
+      attachBtn.removeEventListener('click', onAttachClick);
+      attachClear.removeEventListener('click', onAttachClear);
+      fileInput.removeEventListener('change', onFileChange);
       inputArea.classList.add('hidden');
     }
     function onSubmit() {
       const text = studentInput.value.trim();
-      if (!text) {
+      if (!text && !attachedImage) {
         studentInput.focus();
         return;
       }
       beep(660, 0.06, 'square', 0.1);
+      const image = attachedImage;
       cleanup();
-      resolve({ type: 'argue', text });
+      resolve({ type: 'argue', text, image });
     }
     function onGiveUp() {
       beep(220, 0.1, 'sawtooth', 0.1);
@@ -307,22 +394,28 @@ function showInput() {
     submitBtn.addEventListener('click', onSubmit);
     giveupBtn.addEventListener('click', onGiveUp);
     studentInput.addEventListener('keydown', onKey);
+    attachBtn.addEventListener('click', onAttachClick);
+    attachClear.addEventListener('click', onAttachClear);
+    fileInput.addEventListener('change', onFileChange);
   });
 }
 
 // ===== Gemini API =====
-async function callGemini(userText) {
+async function callGemini(userText, image) {
   const apiKey = localStorage.getItem(LS_KEY);
   const model = localStorage.getItem(LS_MODEL) || 'gemini-2.5-pro';
   if (!apiKey) throw new Error('API 키가 없습니다.');
 
-  State.conversation.push({ role: 'user', content: userText });
+  const textForModel = userText || '(학생이 사진 증거를 제출했습니다.)';
+  State.conversation.push({ role: 'user', content: textForModel, image: image || null });
 
-  // 내부 conversation 형식을 Gemini contents 형식으로 변환
-  const contents = State.conversation.map((m) => ({
-    role: m.role === 'assistant' ? 'model' : 'user',
-    parts: [{ text: m.content }]
-  }));
+  // 내부 conversation 형식을 Gemini contents 형식으로 변환 (이미지는 inline_data로)
+  const contents = State.conversation.map((m) => {
+    const parts = [];
+    if (m.image) parts.push({ inline_data: { mime_type: m.image.mimeType, data: m.image.data } });
+    parts.push({ text: m.content });
+    return { role: m.role === 'assistant' ? 'model' : 'user', parts };
+  });
 
   const body = {
     system_instruction: { parts: [{ text: SYSTEM_PROMPT }] },
@@ -382,8 +475,10 @@ async function startGame() {
   titleScreen.classList.add('hidden');
   gameScreen.classList.remove('hidden');
   State.hp = State.maxHp = 100;
+  State.teacherHp = State.teacherMaxHp = 100;
   State.conversation = [];
   setHP(100);
+  setTeacherHP(100);
   setRound(0);
 
   // 인트로
@@ -409,16 +504,19 @@ async function startGame() {
       return endGame('guilty', '자백');
     }
 
-    // 학생 대사 표시
-    await say('student', '학생 (나)', '😬', action.text);
+    // 학생의 이의 제기!
+    await takeThat();
 
-    // OBJECTION! → API 호출
-    await objection();
+    // 학생 대사 표시 (사진 증거가 있으면 표시)
+    const studentLine = action.image
+      ? (action.text ? action.text + '\n<span class="emph">📎 사진 증거 제출!</span>' : '<span class="emph">📎 사진 증거를 제출했다!</span>')
+      : action.text;
+    await say('student', '학생 (나)', '😤', studentLine);
 
     let aiResult;
     try {
       thinkingOverlay.classList.remove('hidden');
-      aiResult = await callGemini(action.text);
+      aiResult = await callGemini(action.text, action.image);
     } catch (err) {
       thinkingOverlay.classList.add('hidden');
       await say('narrator', '— 시스템 오류 —', null, `<span class="emph">API 호출 실패:</span>\n${err.message}\n\nAPI 키나 네트워크를 확인하세요.`);
@@ -430,19 +528,25 @@ async function startGame() {
       thinkingOverlay.classList.add('hidden');
     }
 
-    // 반박 표시
+    // 선생님의 반박 (OBJECTION!)
+    await objection();
     await say('teacher', '영어학원 선생님', '😏', aiResult.rebuttal);
 
-    // 데미지 적용
+    // 변명의 허점 → 학생 신뢰도 감소
     const dmg = Math.max(0, Math.min(30, parseInt(aiResult.damage, 10) || 0));
-    if (dmg > 0) {
-      setHP(State.hp - dmg);
+    if (dmg > 0) setHP(State.hp - dmg);
+
+    // 변명의 설득력 → 선생님 자신감 감소
+    const tdmg = Math.max(0, Math.min(30, parseInt(aiResult.teacher_damage, 10) || 0));
+    if (tdmg > 0) {
+      setTeacherHP(State.teacherHp - tdmg);
+      shakeSprite('teacher');
     }
 
-    // 평결 체크
-    if (aiResult.verdict === 'notguilty') {
+    // 평결 체크 — 선생님 자신감이 바닥나면 학생 승리
+    if (aiResult.verdict === 'notguilty' || State.teacherHp <= 0) {
       await takeThat();
-      await say('student', '학생 (나)', '😎', '(이겼다... 선생님의 ChatGPT가 패배했다...!)');
+      await say('student', '학생 (나)', '😎', '(이겼다... 선생님도 말문이 막혔다...!)');
       return endGame('notguilty');
     }
     if (aiResult.verdict === 'guilty' || State.hp <= 0) {
@@ -451,8 +555,8 @@ async function startGame() {
     }
   }
 
-  // 라운드 다 씀
-  if (State.hp >= 50) {
+  // 라운드 다 씀 — 남은 게이지로 승부
+  if (State.hp >= State.teacherHp) {
     return endGame('notguilty');
   }
   return endGame('timeout');
