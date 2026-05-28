@@ -1,17 +1,17 @@
 // 역전재판: 숙제 안 한 자의 변론 — AI Edition
-// 학생(플레이어)가 자유 입력 → Claude API가 선생님의 반박을 생성
+// 학생(플레이어)가 자유 입력 → Gemini API가 선생님의 반박을 생성
 
 const State = {
   hp: 100,
   maxHp: 100,
   round: 0,
-  conversation: [],  // [{role: 'user'|'assistant', content: string}, ...] — Claude API 형식
+  conversation: [],  // [{role: 'user'|'assistant', content: string}, ...] — 내부 형식, 호출 시 Gemini 형식으로 변환
   typing: false,
   busy: false,       // API 호출 중
 };
 
-const LS_KEY = 'aceattorney_hw_apikey';
-const LS_MODEL = 'aceattorney_hw_model';
+const LS_KEY = 'aceattorney_hw_gemini_apikey';
+const LS_MODEL = 'aceattorney_hw_gemini_model';
 
 // ===== DOM =====
 const $ = (s) => document.querySelector(s);
@@ -310,34 +310,36 @@ function showInput() {
   });
 }
 
-// ===== Claude API =====
-async function callClaude(userText) {
+// ===== Gemini API =====
+async function callGemini(userText) {
   const apiKey = localStorage.getItem(LS_KEY);
-  const model = localStorage.getItem(LS_MODEL) || 'claude-opus-4-7';
+  const model = localStorage.getItem(LS_MODEL) || 'gemini-2.5-pro';
   if (!apiKey) throw new Error('API 키가 없습니다.');
 
   State.conversation.push({ role: 'user', content: userText });
 
+  // 내부 conversation 형식을 Gemini contents 형식으로 변환
+  const contents = State.conversation.map((m) => ({
+    role: m.role === 'assistant' ? 'model' : 'user',
+    parts: [{ text: m.content }]
+  }));
+
   const body = {
-    model,
-    max_tokens: 1024,
-    system: SYSTEM_PROMPT,
-    messages: State.conversation,
-    output_config: {
-      format: {
-        type: 'json_schema',
-        schema: REBUTTAL_SCHEMA
-      }
+    system_instruction: { parts: [{ text: SYSTEM_PROMPT }] },
+    contents,
+    generationConfig: {
+      maxOutputTokens: 1024,
+      responseMimeType: 'application/json',
+      responseSchema: REBUTTAL_SCHEMA
     }
   };
 
-  const resp = await fetch('https://api.anthropic.com/v1/messages', {
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`;
+  const resp = await fetch(url, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      'x-api-key': apiKey,
-      'anthropic-version': '2023-06-01',
-      'anthropic-dangerous-direct-browser-access': 'true'
+      'x-goog-api-key': apiKey
     },
     body: JSON.stringify(body)
   });
@@ -354,18 +356,22 @@ async function callClaude(userText) {
   }
 
   const data = await resp.json();
-  const textBlock = (data.content || []).find((b) => b.type === 'text');
-  if (!textBlock) throw new Error('API 응답에 텍스트 블록이 없습니다.');
+  const cand = (data.candidates || [])[0];
+  const text = (cand?.content?.parts || [])
+    .map((p) => p.text)
+    .filter(Boolean)
+    .join('');
+  if (!text) throw new Error('API 응답에 텍스트가 없습니다.');
 
   let parsed;
   try {
-    parsed = JSON.parse(textBlock.text);
+    parsed = JSON.parse(text);
   } catch (e) {
-    throw new Error('AI 응답 JSON 파싱 실패: ' + textBlock.text.slice(0, 200));
+    throw new Error('AI 응답 JSON 파싱 실패: ' + text.slice(0, 200));
   }
 
-  // 어시스턴트 응답을 conversation에도 저장 (다음 라운드 컨텍스트용)
-  State.conversation.push({ role: 'assistant', content: textBlock.text });
+  // 모델 응답을 conversation에도 저장 (다음 라운드 컨텍스트용)
+  State.conversation.push({ role: 'assistant', content: text });
 
   return parsed;
 }
@@ -412,7 +418,7 @@ async function startGame() {
     let aiResult;
     try {
       thinkingOverlay.classList.remove('hidden');
-      aiResult = await callClaude(action.text);
+      aiResult = await callGemini(action.text);
     } catch (err) {
       thinkingOverlay.classList.add('hidden');
       await say('narrator', '— 시스템 오류 —', null, `<span class="emph">API 호출 실패:</span>\n${err.message}\n\nAPI 키나 네트워크를 확인하세요.`);
@@ -483,7 +489,7 @@ function openApiKeyModal(errorMsg) {
   apikeyModal.classList.remove('hidden');
   const existing = localStorage.getItem(LS_KEY) || '';
   $('#apikey-input').value = existing;
-  const existingModel = localStorage.getItem(LS_MODEL) || 'claude-opus-4-7';
+  const existingModel = localStorage.getItem(LS_MODEL) || 'gemini-2.5-pro';
   $('#model-select').value = existingModel;
   const errEl = $('#apikey-error');
   if (errorMsg) {
@@ -525,8 +531,8 @@ $('#apikey-save').addEventListener('click', (e) => {
     errEl.classList.remove('hidden');
     return;
   }
-  if (!key.startsWith('sk-ant-')) {
-    errEl.textContent = 'Anthropic API 키는 "sk-ant-"로 시작합니다.';
+  if (!key.startsWith('AIza')) {
+    errEl.textContent = 'Google Gemini API 키는 "AIza"로 시작합니다.';
     errEl.classList.remove('hidden');
     return;
   }

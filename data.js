@@ -10,7 +10,7 @@ const INTRO_SCRIPT = [
   { speaker: 'teacher', name: '영어학원 선생님', face: '😤', text: '네가 어떤 변명을 하든, <span class="emph">AI가 다 반박해줄 거야.</span> 자, 시작해.' }
 ];
 
-// 시스템 프롬프트 — Claude API에 전달
+// 시스템 프롬프트 — Gemini API에 전달
 const SYSTEM_PROMPT = `당신은 영어학원의 깐깐하고 코믹한 선생님입니다. 학생이 어제 숙제(워크북 12페이지)를 안 해온 이유를 변명할 때마다, 당신은 ChatGPT를 처음 써본 척하면서 그 변명을 박살내야 합니다.
 
 # 캐릭터 톤
@@ -60,7 +60,7 @@ verdict:
   "verdict": "notguilty"
 }`;
 
-// 구조화된 출력 스키마
+// 구조화된 출력 스키마 (Gemini responseSchema 형식)
 const REBUTTAL_SCHEMA = {
   type: 'object',
   properties: {
@@ -79,7 +79,7 @@ const REBUTTAL_SCHEMA = {
     }
   },
   required: ['rebuttal', 'damage', 'verdict'],
-  additionalProperties: false
+  propertyOrdering: ['rebuttal', 'damage', 'verdict']
 };
 
 // 첫 질문 (1라운드 시작용)
