@@ -51,10 +51,16 @@
 <div id="game-screen" class="screen hidden">
   <div id="court-bg">
     <div id="hp-bar-wrap">
-      <div class="hp-label">신뢰도</div>
+      <div class="hp-label">학생 신뢰도</div>
       <div id="hp-bar"><div id="hp-fill"></div></div>
       <div id="hp-text">100 / 100</div>
       <div id="round-text">라운드 1 / 7</div>
+    </div>
+
+    <div id="teacher-hp-bar-wrap">
+      <div class="teacher-hp-label">선생님 자신감</div>
+      <div id="teacher-hp-bar"><div id="teacher-hp-fill"></div></div>
+      <div id="teacher-hp-text">100 / 100</div>
     </div>
 
     <button id="reset-key-btn" title="API 키 변경">⚙</button>
@@ -84,7 +90,7 @@
       <div id="holdit-text">잠깐!</div>
     </div>
     <div id="thinking-overlay" class="hidden">
-      <div id="thinking-text">선생님이 ChatGPT에게 물어보는 중...</div>
+      <div id="thinking-text">선생님이 반박을 준비하는 중...</div>
       <div class="spinner"></div>
     </div>
 
@@ -97,6 +103,15 @@
     <div id="input-area" class="hidden">
       <div class="input-label">변명을 입력하세요 <span class="hint">(Enter = 제출, Shift+Enter = 줄바꿈)</span></div>
       <textarea id="student-input" placeholder="예: 강아지가 숙제장을 먹어버렸어요..." rows="3" maxlength="500"></textarea>
+      <div class="attach-row">
+        <input type="file" id="file-input" accept="image/*" hidden>
+        <button type="button" id="attach-btn" class="attach-btn">📎 사진 증거 첨부</button>
+        <div id="attach-preview" class="attach-preview hidden">
+          <img id="attach-thumb" class="hidden" alt="첨부 미리보기">
+          <span id="attach-name" class="attach-name"></span>
+          <button type="button" id="attach-clear" class="attach-clear" title="첨부 제거">✕</button>
+        </div>
+      </div>
       <div class="input-buttons">
         <button id="submit-btn" class="action-btn">변론 제출</button>
         <button id="giveup-btn" class="action-btn admit">자백 (포기)</button>
