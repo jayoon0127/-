@@ -16,27 +16,27 @@
     <p class="title-tag">학원 강의실 법정에서 진실을 밝혀라<br><span class="ai-tag">선생님이 실시간 AI로 반박합니다</span></p>
     <button id="start-btn" class="court-btn">법정 입정</button>
     <button id="config-btn" class="secondary-btn">API 키 설정</button>
-    <p class="credit">A Phoenix Wright Parody · 영어학원 에디션 · Powered by Claude</p>
+    <p class="credit">A Phoenix Wright Parody · 영어학원 에디션 · Powered by Gemini</p>
   </div>
   <div class="title-bg"></div>
 </div>
 
 <div id="apikey-modal" class="screen hidden">
   <div class="modal-card">
-    <h2>Anthropic API 키 입력</h2>
+    <h2>Google Gemini API 키 입력</h2>
     <p class="modal-desc">
-      이 게임은 <b>Claude API</b>를 호출해서 선생님의 반박을 생성합니다.<br>
-      <a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noopener">console.anthropic.com</a>에서 API 키를 받으세요.<br>
-      <span class="modal-warn">키는 <b>브라우저 localStorage</b>에만 저장됩니다. 외부로 전송되지 않습니다 (Anthropic API 제외).</span>
+      이 게임은 <b>Gemini API</b>를 호출해서 선생님의 반박을 생성합니다.<br>
+      <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noopener">aistudio.google.com</a>에서 무료 API 키를 받으세요.<br>
+      <span class="modal-warn">키는 <b>브라우저 localStorage</b>에만 저장됩니다. 외부로 전송되지 않습니다 (Gemini API 제외).</span>
     </p>
-    <input type="password" id="apikey-input" placeholder="sk-ant-..." autocomplete="off" spellcheck="false">
+    <input type="password" id="apikey-input" placeholder="AIza..." autocomplete="off" spellcheck="false">
     <div class="modal-row">
       <label class="modal-select">
         모델:
         <select id="model-select">
-          <option value="claude-opus-4-7" selected>Opus 4.7 (가장 똑똑, 느림)</option>
-          <option value="claude-sonnet-4-6">Sonnet 4.6 (균형)</option>
-          <option value="claude-haiku-4-5">Haiku 4.5 (가장 빠름, 저렴)</option>
+          <option value="gemini-2.5-flash" selected>Gemini 2.5 Flash (균형, 추천)</option>
+          <option value="gemini-2.5-pro">Gemini 2.5 Pro (가장 똑똑, 느림)</option>
+          <option value="gemini-2.5-flash-lite">Gemini 2.5 Flash-Lite (가장 빠름)</option>
         </select>
       </label>
     </div>

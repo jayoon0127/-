@@ -10,8 +10,8 @@ const State = {
   busy: false,       // API 호출 중
 };
 
-const LS_KEY = 'aceattorney_hw_apikey';
-const LS_MODEL = 'aceattorney_hw_model';
+const LS_KEY = 'aceattorney_hw_gemini_key';
+const LS_MODEL = 'aceattorney_hw_gemini_model';
 
 // ===== DOM =====
 const $ = (s) => document.querySelector(s);
@@ -310,34 +310,38 @@ function showInput() {
   });
 }
 
-// ===== Claude API =====
-async function callClaude(userText) {
+// ===== Gemini API =====
+async function callGemini(userText) {
   const apiKey = localStorage.getItem(LS_KEY);
-  const model = localStorage.getItem(LS_MODEL) || 'claude-opus-4-7';
+  const model = localStorage.getItem(LS_MODEL) || 'gemini-2.5-flash';
   if (!apiKey) throw new Error('API 키가 없습니다.');
 
-  State.conversation.push({ role: 'user', content: userText });
+  // Gemini 대화 형식: { role: 'user'|'model', parts: [{text}] }
+  State.conversation.push({ role: 'user', parts: [{ text: userText }] });
+
+  const generationConfig = {
+    responseMimeType: 'application/json',
+    responseSchema: REBUTTAL_SCHEMA,
+    maxOutputTokens: 2048,
+    temperature: 1.0
+  };
+  // flash 계열은 thinking 끄고 속도 우선 (pro는 thinking 유지)
+  if (model.includes('flash')) {
+    generationConfig.thinkingConfig = { thinkingBudget: 0 };
+  }
 
   const body = {
-    model,
-    max_tokens: 1024,
-    system: SYSTEM_PROMPT,
-    messages: State.conversation,
-    output_config: {
-      format: {
-        type: 'json_schema',
-        schema: REBUTTAL_SCHEMA
-      }
-    }
+    systemInstruction: { parts: [{ text: SYSTEM_PROMPT }] },
+    contents: State.conversation,
+    generationConfig
   };
 
-  const resp = await fetch('https://api.anthropic.com/v1/messages', {
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`;
+  const resp = await fetch(url, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      'x-api-key': apiKey,
-      'anthropic-version': '2023-06-01',
-      'anthropic-dangerous-direct-browser-access': 'true'
+      'x-goog-api-key': apiKey
     },
     body: JSON.stringify(body)
   });
@@ -354,18 +358,26 @@ async function callClaude(userText) {
   }
 
   const data = await resp.json();
-  const textBlock = (data.content || []).find((b) => b.type === 'text');
-  if (!textBlock) throw new Error('API 응답에 텍스트 블록이 없습니다.');
+  const cand = data.candidates && data.candidates[0];
+  if (!cand) {
+    const reason = data.promptFeedback?.blockReason;
+    throw new Error('AI 응답 없음' + (reason ? ` (콘텐츠 차단: ${reason})` : ''));
+  }
+  const parts = (cand.content && cand.content.parts) || [];
+  const textPart = parts.map((p) => p.text).filter(Boolean).join('');
+  if (!textPart) {
+    throw new Error('API 응답에 텍스트가 없습니다. (finishReason: ' + (cand.finishReason || '?') + ')');
+  }
 
   let parsed;
   try {
-    parsed = JSON.parse(textBlock.text);
+    parsed = JSON.parse(textPart);
   } catch (e) {
-    throw new Error('AI 응답 JSON 파싱 실패: ' + textBlock.text.slice(0, 200));
+    throw new Error('AI 응답 JSON 파싱 실패: ' + textPart.slice(0, 200));
   }
 
-  // 어시스턴트 응답을 conversation에도 저장 (다음 라운드 컨텍스트용)
-  State.conversation.push({ role: 'assistant', content: textBlock.text });
+  // 모델 응답을 conversation에도 저장 (다음 라운드 컨텍스트용)
+  State.conversation.push({ role: 'model', parts: [{ text: textPart }] });
 
   return parsed;
 }
@@ -412,7 +424,7 @@ async function startGame() {
     let aiResult;
     try {
       thinkingOverlay.classList.remove('hidden');
-      aiResult = await callClaude(action.text);
+      aiResult = await callGemini(action.text);
     } catch (err) {
       thinkingOverlay.classList.add('hidden');
       await say('narrator', '— 시스템 오류 —', null, `<span class="emph">API 호출 실패:</span>\n${err.message}\n\nAPI 키나 네트워크를 확인하세요.`);
@@ -483,7 +495,7 @@ function openApiKeyModal(errorMsg) {
   apikeyModal.classList.remove('hidden');
   const existing = localStorage.getItem(LS_KEY) || '';
   $('#apikey-input').value = existing;
-  const existingModel = localStorage.getItem(LS_MODEL) || 'claude-opus-4-7';
+  const existingModel = localStorage.getItem(LS_MODEL) || 'gemini-2.5-flash';
   $('#model-select').value = existingModel;
   const errEl = $('#apikey-error');
   if (errorMsg) {
@@ -525,8 +537,8 @@ $('#apikey-save').addEventListener('click', (e) => {
     errEl.classList.remove('hidden');
     return;
   }
-  if (!key.startsWith('sk-ant-')) {
-    errEl.textContent = 'Anthropic API 키는 "sk-ant-"로 시작합니다.';
+  if (!key.startsWith('AIza')) {
+    errEl.textContent = 'Google Gemini API 키는 "AIza"로 시작합니다.';
     errEl.classList.remove('hidden');
     return;
   }

@@ -60,26 +60,26 @@ verdict:
   "verdict": "notguilty"
 }`;
 
-// 구조화된 출력 스키마
+// 구조화된 출력 스키마 (Gemini responseSchema 형식)
 const REBUTTAL_SCHEMA = {
-  type: 'object',
+  type: 'OBJECT',
   properties: {
     rebuttal: {
-      type: 'string',
+      type: 'STRING',
       description: '선생님의 반박 대사. <강조></강조> 태그 사용 가능. 2~4문장.'
     },
     damage: {
-      type: 'integer',
+      type: 'INTEGER',
       description: '학생 변명의 약점 점수 0~30. 헛소리일수록 높음.'
     },
     verdict: {
-      type: 'string',
+      type: 'STRING',
       enum: ['continue', 'notguilty', 'guilty'],
       description: 'continue=계속, notguilty=학생 완승, guilty=학생 패배'
     }
   },
   required: ['rebuttal', 'damage', 'verdict'],
-  additionalProperties: false
+  propertyOrdering: ['rebuttal', 'damage', 'verdict']
 };
 
 // 첫 질문 (1라운드 시작용)
